@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commsfinder</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <img src="../icons/icon32.png" alt="Commsfinder" class="header-icon">
+        <h1 class="header-title">Commsfinder</h1>
+        <button class="settings-btn" id="settingsBtn" title="Settings">
+          ⚙️
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Status Section -->
+      <section class="status-section">
+        <div class="scan-status" id="scanStatus">
+          <div class="status-indicator" id="statusIndicator">
+            <span class="status-dot"></span>
+            <span class="status-text" id="statusText">Ready to scan</span>
+          </div>
+          <div class="last-scan" id="lastScan">
+            Never scanned
+          </div>
+        </div>
+      </section>
+
+      <!-- Platform Selection -->
+      <section class="platform-section">
+        <h3 class="section-title">Platforms to Scan</h3>
+        <div class="platform-options">
+          <label class="platform-option" data-platform="furaffinity">
+            <div class="platform-progress"></div>
+            <div class="platform-content">
+              <input type="checkbox" id="platformFuraffinity" checked>
+              <img src="../logos/fa.webp" alt="FurAffinity" class="platform-icon">
+              <span class="platform-name">FurAffinity</span>
+            </div>
+          </label>
+          <label class="platform-option" data-platform="bluesky">
+            <div class="platform-progress"></div>
+            <div class="platform-content">
+              <input type="checkbox" id="platformBluesky" checked>
+              <img src="../logos/bsky.svg" alt="Bluesky" class="platform-icon">
+              <span class="platform-name">Bluesky</span>
+            </div>
+          </label>
+          <label class="platform-option platform-option-disabled" data-platform="twitter">
+            <div class="platform-progress"></div>
+            <div class="platform-content">
+              <input type="checkbox" id="platformTwitter" disabled>
+              <img src="../logos/twitter.svg" alt="Twitter/X" class="platform-icon">
+              <div class="platform-name-container">
+                <span class="platform-name">Twitter/X</span>
+                <span class="platform-disabled-text" title="Twitter/X is disabled due to API limitations. Click 'why' for further details.">Disabled - <span class="platform-why-link" id="twitterWhyLink">why?</span></span>
+              </div>
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <!-- Model Status Section -->
+      <section class="model-status-section" id="modelStatusSection" style="display: none;">
+        <h3 class="section-title">AI Model Status</h3>
+        <p class="model-info">Using: DistilBERT Commissions (Fine-tuned)</p>
+        <div class="model-status" id="modelStatus">
+            <span id="modelStatusText">Model not downloaded.</span>
+            <button class="download-btn" id="downloadModelBtn">Download Model</button>
+        </div>
+        <div class="model-progress" id="modelProgress" style="display: none;">
+            <div class="progress-bar">
+                <div class="progress-fill" id="modelProgressFill"></div>
+            </div>
+            <div class="progress-text" id="modelProgressText">Downloading...</div>
+        </div>
+      </section>
+
+      <!-- Scan Button -->
+      <section class="action-section">
+        <div class="scan-controls">
+            <button id="scanBtn" class="primary-btn">
+                <span class="scan-icon">🔍</span>
+                <span class="scan-text">Scan for Open Commissions</span>
+            </button>
+            <button id="stopBtn" class="secondary-btn" style="display: none;">
+                <span class="stop-icon">⏹</span>
+                <span class="stop-text">Pause Scan</span>
+            </button>
+        </div>
+        
+        <div class="scan-progress" id="scanProgress" style="display: none;">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="progress-text" id="progressText">Scanning platforms...</div>
+        </div>
+      </section>
+
+      <!-- Results Section -->
+      <section class="results-section" id="resultsSection" style="display: none;">
+        <div class="results-header">
+          <h3 class="results-title">Open Commissions Found</h3>
+          <div class="results-count" id="resultsCount">0 artists</div>
+        </div>
+        
+        <div class="results-filter">
+          <select id="confidenceFilter" class="filter-select">
+            <option value="0">All Results</option>
+            <option value="0.5">Medium Confidence+</option>
+            <option value="0.7">High Confidence</option>
+          </select>
+          <select id="platformFilter" class="filter-select">
+            <option value="">All Platforms</option>
+            <option value="furaffinity">FurAffinity</option>
+            <option value="bluesky">Bluesky</option>
+            <option value="twitter">Twitter/X</option>
+          </select>
+        </div>
+        
+        <div class="results-filter" style="margin-top: 8px; position: relative;">
+          <input type="text" id="searchFilter" class="search-input" placeholder="Search by artist name, username, bio..." style="width: 100%; padding: 8px 32px 8px 12px; border: 1px solid #374151; border-radius: 6px; background: #1f2937; color: #e5e7eb; font-size: 13px;">
+          <button id="clearSearchBtn" class="clear-search-btn" title="Clear search" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #6b7280; cursor: pointer; font-size: 16px; padding: 2px;">×</button>
+        </div>
+        
+        <div class="results-filter" style="margin-top: 8px;">
+          <label class="toggle-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="showBlacklisted" style="cursor: pointer;">
+            <span>Show Blacklisted Artists</span>
+          </label>
+        </div>
+
+        <div class="results-list" id="resultsList">
+          <!-- Results will be populated here -->
+        </div>
+
+        <div class="results-actions">
+          <button class="clear-btn" id="clearBtn">Clear Results</button>
+          <button class="export-btn" id="exportBtn">Export List</button>
+        </div>
+
+        <!-- Results Loading Overlay -->
+        <div class="results-loading-overlay" id="resultsLoadingOverlay" style="display: none;">
+          <div class="results-loading-content">
+            <div class="results-loading-spinner"></div>
+            <div class="results-loading-text">Scanning in progress, please wait...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Empty State -->
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">🎯</div>
+        <h3 class="empty-title">Find Open Commissions</h3>
+        <p class="empty-description">
+          Scan your followed artists across social media to find who has open commission slots.
+        </p>
+        <ul class="empty-features">
+          <li>✨ AI-powered detection</li>
+          <li>🔍 Pattern recognition</li>
+          <li>📊 Confidence scoring</li>
+          <li>🚀 Multi-platform support</li>
+        </ul>
+      </div>
+    </main>
+
+    <!-- CommsClassifier Promo Section -->
+    <div id="commsClassifierPromo" class="classifier-promo" style="display: none;">
+      <div class="promo-content">
+        <div class="promo-header">
+          <img src="../icons/icon48.png" alt="CommsClassifier Logo" class="promo-logo">
+          <h3>Help Improve Detection</h3>
+        </div>
+        <p>Want to help make commission detection more accurate? Try my companion extension CommsClassifier to submit manual classifications used to improve the scan accuracy.</p>
+        <div class="promo-buttons">
+          <a href="https://chromewebstore.google.com/detail/cpfbbohbgdlhfhibcobnogoijflamnkl" target="_blank" class="promo-btn chrome-btn">
+            <img src="../icons/chrome.svg" alt="Chrome" class="store-icon">
+            Chrome Store
+          </a>
+          <a href="https://addons.mozilla.org/en-US/firefox/addon/commscrowdsourcer/" target="_blank" class="promo-btn firefox-btn">
+            <img src="../icons/firefox.svg" alt="Firefox" class="store-icon">
+            Firefox Add-ons
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Roadmap Section -->
+    <div class="roadmap-section">
+      <div class="roadmap-header">
+        <h3>🗺️ What's Next?</h3>
+        <span class="eta-tag">ETA: when there's motivation 💀</span>
+      </div>
+      
+      <div class="roadmap-items">
+        <div class="roadmap-item">
+          <div class="version-tag">v1.1</div>
+          <div class="roadmap-content">
+            <h4>Polish Update</h4>
+            <ul>
+              <li>Improve UI and scan experience</li>
+              <li>Bug fixing</li>
+              <li>Implement user feedback</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="roadmap-item">
+          <div class="version-tag">v1.2</div>
+          <div class="roadmap-content">
+            <h4>NoAI Mode</h4>
+            <ul>
+              <li>Regex and keyword-based detection</li>
+              <li>Manual dictionary support</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="roadmap-item">
+          <div class="version-tag">v1.3</div>
+          <div class="roadmap-content">
+            <h4>Community Verification</h4>
+            <ul>
+              <li>Report scan accuracy</li>
+              <li>Submit open artist status</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="roadmap-item">
+          <div class="version-tag">v1.4</div>
+          <div class="roadmap-content">
+            <h4>Platform Expansion</h4>
+            <ul>
+              <li>YCH.commishes</li>
+              <li>Weasyl</li>
+              <li>Artistree</li>
+              <li>Artconomy</li>
+              <li>And more!</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feedback Section -->
+    <div class="feedback-section" style="display: none;">
+      <div class="feedback-header">
+        <h3>💭 Share Your Thoughts</h3>
+      </div>
+      <p class="feedback-description">Found a bug? Have a feature request? Your feedback helps make CommsFinder better!</p>
+      
+      <div class="feedback-buttons">
+        <a href="https://github.com/yourusername/commsfinder/issues/new?template=bug_report.md" 
+           target="_blank" 
+           class="feedback-btn bug-report-btn">
+          <span class="feedback-btn-icon">🐛</span>
+          Report Bug
+        </a>
+        <a href="https://github.com/yourusername/commsfinder/issues/new?template=feature_request.md" 
+           target="_blank" 
+           class="feedback-btn feature-request-btn">
+          <span class="feedback-btn-icon">💡</span>
+          Suggest Feature
+        </a>
+        <a href="https://forms.gle/yourFormId" 
+           target="_blank" 
+           class="feedback-btn general-feedback-btn">
+          <span class="feedback-btn-icon">📝</span>
+          Quick Feedback
+        </a>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal" id="settingsModal" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Settings</h3>
+          <button class="modal-close" id="modalClose">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="setting-group">
+            <label class="setting-label">
+              <input type="checkbox" id="aiEnabled">
+              Enable AI Analysis
+            </label>
+            <p class="setting-description">
+              <strong>AI Mode (ON):</strong> Uses a fine-tuned DistilBERT model for intelligent commission detection with nuanced understanding.<br>
+              <strong>No-AI Mode (OFF):</strong> Uses regex pattern matching to detect specific phrases like "commissions open", "comms closed", etc. Faster but less accurate.
+            </p>
+          </div>
+          
+          <div class="setting-group" id="modelSelectionGroup">
+            <label class="setting-label">Model Quantization</label>
+            <select id="modelSelector" class="model-select">
+              <option value="quantized">Quantized INT8 (67.5 MB) - Recommended</option>
+              <option value="q4f16">Q4F16 (73 MB) - 4-bit weights, good quality</option>
+              <option value="int8" disabled>INT8 (67.5 MB) - Integer quantization</option>
+              <option value="uint8" disabled>UINT8 (67.5 MB) - Unsigned integer</option>
+              <option value="bnb4" disabled>BNB4 (122 MB) - 4-bit bitsandbytes</option>
+              <option value="q4" disabled>Q4 (125 MB) - 4-bit quantization</option>
+              <option value="fp16">FP16 (134 MB) - Half precision</option>
+              <option value="full">Full Precision (268 MB) - Highest accuracy</option>
+            </select>
+            <p class="setting-description">Choose the quantization level for the DistilBERT Commissions model. Smaller sizes load faster with slightly reduced accuracy.</p>
+          </div>
+          
+          <div class="setting-group">
+            <label class="setting-label">Model Temperature</label>
+            <input type="range" id="modelTemperature" min="0.5" max="3.0" step="0.1" value="1.0">
+            <span id="temperatureValue">1.0</span>
+            <p class="setting-description">Higher values reduce confidence scores (try 1.5-3.0 for more realistic confidence)</p>
+          </div>
+          
+          <!-- Developer-only benchmark section -->
+          <div class="setting-group" id="benchmarkGroup" style="display: none;">
+            <div class="benchmark-button-container">
+              <button id="runBenchmarkBtn" class="benchmark-btn">
+                <span class="benchmark-text">Run Benchmark</span>
+                <div class="benchmark-progress-fill"></div>
+              </button>
+            </div>
+            <div class="benchmark-progress" style="display: none;">
+              <div class="benchmark-progress-fill"></div>
+              <div class="benchmark-text">Initializing...</div>
+            </div>
+            <div id="benchmarkResults" style="display: none;">
+              <h4>Benchmark Results (500 samples)</h4>
+              <p>Higher scores are better. F1 score is the harmonic mean of precision and recall.</p>
+              <div class="benchmark-table">
+                <table></table>
+              </div>
+            </div>
+          </div>
+          
+          <div class="setting-group">
+            <label class="setting-label">
+              <input type="checkbox" id="debugMode">
+              Enable Debug Mode
+            </label>
+            <p class="setting-description">Show detailed logging information in the browser console for debugging purposes.</p>
+          </div>
+          
+          <div class="setting-group">
+            <button class="danger-btn" id="clearAllData">Clear All Data</button>
+            <p class="setting-description">Remove all cached scan results</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+      <div class="loading-content">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Initializing scanner...</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="fuse.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html> 
+</html> 

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commsfinder - Demo & Test Page</title>
+    <link rel="stylesheet" href="/demo.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><img src="logos/fa.webp" alt="Commsfinder" style="width: 32px; height: 32px; vertical-align: middle; margin-right: 8px;"> Commsfinder</h1>
+            <p>Find artists with open commissions across social media platforms</p>
+        </div>
+        
+        <div class="content">
+            <!-- Extension ID Section (only shown when accessed externally) -->
+            <div id="extension-id-section" class="section">
+                <h2>Extension Setup</h2>
+                <div class="test-area">
+                    <p>To use this demo page externally, you need to enter your extension ID:</p>
+                    <input type="text" id="extensionId" class="test-input" placeholder="Extension ID (e.g. abcdefghijklmnopqrstuvwxyz)">
+                    <button id="saveIdButton" class="test-button">Save ID</button>
+                    <div id="extension-status" class="status"></div>
+                </div>
+            </div>
+
+            <!-- Test Area -->
+            <div class="section">
+                <h2>Test the AI</h2>
+                <div class="test-area">
+                    <textarea id="testText" class="test-input" rows="4" placeholder="Enter text to analyze..."></textarea>
+                    <button id="analyzeButton" class="test-button">Analyze Text</button>
+                    <button id="testButton" class="test-button">Run Tests</button>
+                    <div id="analyzeResult"></div>
+                </div>
+            </div>
+
+            <!-- Example Texts -->
+            <div class="section">
+                <h2>Example Texts</h2>
+                <div class="example-texts">
+                    <div class="example-text" data-text="Commissions are OPEN! DM me for details and pricing.">
+                        <div class="label">Clearly Open</div>
+                        <div class="text">Commissions are OPEN! DM me for details and pricing.</div>
+                    </div>
+                    <div class="example-text" data-text="Commissions are currently closed. Will reopen next month!">
+                        <div class="label">Clearly Closed</div>
+                        <div class="text">Commissions are currently closed. Will reopen next month!</div>
+                    </div>
+                    <div class="example-text" data-text="Taking commission requests! Limited slots available.">
+                        <div class="label">Open with Slots</div>
+                        <div class="text">Taking commission requests! Limited slots available.</div>
+                    </div>
+                    <div class="example-text" data-text="Check out my commission info and pricing in my bio!">
+                        <div class="label">Ambiguous</div>
+                        <div class="text">Check out my commission info and pricing in my bio!</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="content/ml-handler.js"></script>
+    <script src="demo.js"></script>
+</body>
+</html> 

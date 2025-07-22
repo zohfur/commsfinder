@@ -1,0 +1,42 @@
+{
+  "name": "commsfinder",
+  "version": "1.0.0",
+  "description": "Find artists with open commissions across social media platforms",
+  "main": "background.js",
+  "scripts": {
+    "test": "jest",
+    "build": "webpack --config webpack.config.js",
+    "build:firefox": "webpack --config webpack.firefox.config.js",
+    "build:both": "npm run build && npm run build:firefox",
+    "watch": "webpack --watch --config webpack.config.js",
+    "watch:firefox": "webpack --watch --config webpack.firefox.config.js"
+  },
+  "keywords": [
+    "chrome-extension",
+    "commissions",
+    "art",
+    "social-media"
+  ],
+  "author": "Zohfur",
+  "license": "MIT",
+  "dependencies": {
+    "@xenova/transformers": "^2.15.0",
+    "chart": "^0.1.2",
+    "onnxruntime-web": "^1.22.0",
+    "performance-now": "^2.1.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.7",
+    "@babel/preset-env": "^7.23.7",
+    "@eslint/js": "^9.31.0",
+    "babel-loader": "^9.1.3",
+    "copy-webpack-plugin": "^12.0.2",
+    "crx3": "^1.1.3",
+    "eslint": "^9.31.0",
+    "eslint-webpack-plugin": "^5.0.2",
+    "globals": "^16.3.0",
+    "jest": "^29.7.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  }
+}

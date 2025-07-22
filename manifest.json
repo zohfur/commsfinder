@@ -1,0 +1,80 @@
+{
+  "manifest_version": 3,
+  "name": "Commsfinder",
+  "version": "1.0",
+  "description": "Find artists with open commissions across multiple platforms",
+  
+  "permissions": [
+    "scripting",
+    "tabs",
+    "storage",
+    "unlimitedStorage"
+  ],
+  
+  "host_permissions": [
+    "*://*.furaffinity.net/*",
+    "*://*.twitter.com/*",
+    "*://*.x.com/*",
+    "*://*.bsky.app/*",
+    "https://huggingface.co/*"
+  ],
+  
+  "background": {
+    "service_worker": "background.js",
+    "type": "module",
+    "scripts": [
+      "background.js"
+    ]
+  },
+  
+  "content_scripts": [],
+  
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Find Open Commissions",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "utils/*",
+        "content/*",
+        "demo.html",
+        "demo.css",
+        "dist/utils/*"
+      ],
+      "matches": [
+        "*://*.furaffinity.net/*",
+        "*://*.twitter.com/*",
+        "*://*.x.com/*",
+        "*://*.bsky.app/*"
+      ]
+    }
+  ],
+  
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  
+  "externally_connectable": {
+    "matches": [
+      "*://*.furaffinity.net/*",
+      "*://*.twitter.com/*",
+      "*://*.x.com/*",
+      "*://*.bsky.app/*"
+    ]
+  }
+} 
