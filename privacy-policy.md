@@ -49,7 +49,7 @@ All data is stored locally in your browser using Chrome's storage API:
 
 ## Contact
 
-If you have questions about this privacy policy, please contact me at <commsfinder@zohfur.dog> or through this extension's GitHub repository.
+If you have questions about this privacy policy, please contact me at <commsfinder@zohfur.dog> or through this extension's [GitHub repository.](url=https://github.com/zohfur/commsfinder)
 
 ## Changes
 
