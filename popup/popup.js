@@ -196,6 +196,10 @@ class CommisionsfinderPopup {
       if (result.aiEnabled !== undefined) {
         this.settings.aiEnabled = result.aiEnabled;
         this.aiEnabled.checked = result.aiEnabled;
+      } else {
+        // If no stored setting, use default (true) and ensure checkbox reflects this
+        this.settings.aiEnabled = true;
+        this.aiEnabled.checked = true;
       }
       
       if (result.selectedQuantization !== undefined) {
