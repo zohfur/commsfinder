@@ -3,7 +3,12 @@
   "name": "Commsfinder",
   "version": "1.0",
   "description": "Find artists with open commissions across multiple platforms",
-  
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "commsfinder@zohfur.dog",
+      "strict_min_version": "121.0"
+    }
+  },
   "permissions": [
     "scripting",
     "tabs",

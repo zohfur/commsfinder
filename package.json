@@ -6,7 +6,7 @@
   "scripts": {
     "test": "jest",
     "build": "webpack --config webpack.config.js",
-    "build:firefox": "webpack --config webpack.firefox.config.js",
+    "build:firefox": "web-ext build --source-dir dist --artifacts-dir dist/firefox",
     "build:both": "npm run build && npm run build:firefox",
     "watch": "webpack --watch --config webpack.config.js",
     "watch:firefox": "webpack --watch --config webpack.firefox.config.js"
@@ -23,7 +23,8 @@
     "@xenova/transformers": "^2.15.0",
     "chart": "^0.1.2",
     "onnxruntime-web": "^1.22.0",
-    "performance-now": "^2.1.0"
+    "performance-now": "^2.1.0",
+    "web-ext": "^8.9.0"
   },
   "devDependencies": {
     "@babel/core": "^7.23.7",

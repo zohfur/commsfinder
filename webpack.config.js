@@ -46,7 +46,11 @@ module.exports = {
         { from: 'logos', to: 'logos' },
         { from: 'popup', to: 'popup' },
         { from: 'manifest.json', to: 'manifest.json' },
-        { from: 'node_modules/onnxruntime-web/dist', to: 'onnxruntime-web' },
+        { from: 'node_modules/onnxruntime-web/dist', to: 'onnxruntime-web',
+          globOptions: {
+            ignore: ['**/ort.all.js', '**/ort.all.js.map','**/ort.all.mjs','**/ort.all.mjs.map']
+          }
+         },
         {
           from: 'benchmark.js',
           to: 'benchmark.js',
