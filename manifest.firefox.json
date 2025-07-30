@@ -64,24 +64,13 @@
         "*://*.twitter.com/*",
         "*://*.x.com/*",
         "*://*.bsky.app/*",
-        "*://*.xethub.hf.co/*",
-        "*://*.huggingface.co/*"
+        "*://*.huggingface.co/*",
+        "*://*.xethub.hf.co/*"
       ]
     }
   ],
   
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  },
-  
-  "externally_connectable": {
-    "matches": [
-      "*://*.furaffinity.net/*",
-      "*://*.twitter.com/*",
-      "*://*.x.com/*",
-      "*://*.bsky.app/*",
-      "*://*.xethub.hf.co/*",
-      "*://*.huggingface.co/*"
-    ]
   }
 } 

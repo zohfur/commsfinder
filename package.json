@@ -6,9 +6,11 @@
   "scripts": {
     "test": "jest",
     "build": "webpack --config webpack.config.js",
-    "build:firefox": "web-ext build --source-dir dist --artifacts-dir dist/firefox",
-    "build:both": "npm run build && npm run build:firefox",
+    "build:chrome": "webpack --config webpack.chrome.config.js",
+    "build:firefox": "webpack --config webpack.firefox.config.js && web-ext build --source-dir dist --artifacts-dir dist/firefox",
+    "build:both": "npm run build:chrome && npm run build:firefox",
     "watch": "webpack --watch --config webpack.config.js",
+    "watch:chrome": "webpack --watch --config webpack.chrome.config.js",
     "watch:firefox": "webpack --watch --config webpack.firefox.config.js"
   },
   "keywords": [
@@ -18,7 +20,7 @@
     "social-media"
   ],
   "author": "Zohfur",
-  "license": "MIT",
+  "license": "AGPL-3.0",
   "dependencies": {
     "@xenova/transformers": "^2.15.0",
     "chart": "^0.1.2",

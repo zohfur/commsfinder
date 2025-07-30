@@ -18,7 +18,7 @@ module.exports = {
     'content/bluesky': './content/bluesky.js',
     'content/furaffinity': './content/furaffinity.js',
     'popup/popup': './popup/popup.js',
-    'utils/ai-worker': './utils/ai-worker.js',
+    'utils/ai-worker': './utils/ai-worker.js'
     // Don't include benchmark.js in the entry points
   },
   output: {
@@ -49,7 +49,7 @@ module.exports = {
         { from: 'icons', to: 'icons' },
         { from: 'logos', to: 'logos' },
         { from: 'popup', to: 'popup' },
-        { from: 'manifest.json', to: 'manifest.json' },
+        { from: 'manifest.firefox.json', to: 'manifest.json' },
         { from: 'node_modules/onnxruntime-web/dist', to: 'onnxruntime-web',
           globOptions: {
             ignore: ['**/ort.all.js', '**/ort.all.js.map','**/ort.all.mjs','**/ort.all.mjs.map']
