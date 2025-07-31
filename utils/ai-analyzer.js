@@ -1,13 +1,14 @@
 // AI-powered text analyzer for commission detection
 // This script contains the core AI logic and is designed to run inside a Web Worker.
 
-import { pipeline, env, AutoTokenizer, AutoModelForCausalLM } from '@xenova/transformers';
+import { pipeline, env } from '@xenova/transformers';
 import { debugLog } from './shared.js';
 
 // Configure transformers.js environment for the extension
 // These settings are safe to be set in the worker.
-env.allowLocalModels = false; // We use a custom cache, not local models
+env.allowLocalModels = false;
 env.useCustomCache = true;
+env.useBrowserCache = true;
 
 // Since we are running in a Chrome extension, we must configure the transformers.js library
 // to use the local paths to the onnxruntime-web worker files.
@@ -26,101 +27,48 @@ env.backends.onnx.wasm = {
 
 // The primary class for performing AI analysis.
 export class AIAnalyzer {
+    static instance = null;
+
     constructor(options = {}) {
-        this.model = options.model || 'zohfur/distilbert-commissions-ONNX';
+        this.model = 'zohfur/distilbert-commissions-ONNX';
         this.quantization = options.quantization || 'quantized';
         this.modelName = null;
         this.modelConfig = null;
         this.modelTemperature = options.temperature || 1.0;
         this.debugMode = false;
+        this.pipeline = null;
         this.initialize();
     }
+    
 
-    async initialize(progressCallback = null) {
+    async initialize() {        
         try {
-            // Get debug mode setting
-            const { debugMode } = await chrome.storage.local.get('debugMode');
-            this.debugMode = debugMode || false;
-
-            if (this.debugMode) {
-                console.log('[AIAnalyzer] Initializing...');
-            }
+                debugLog('[AIAnalyzer] Initializing...');
 
             if (this.pipeline) {
-                console.warn('[AI Analyzer] Model is already initialized.');
-                return;
+                debugLog('[AI Analyzer] Model is already initialized.');
             }
-            if (this.debugMode) {
-                console.log(`[AI Analyzer] Initializing model: ${this.model}`);
-            }
+                debugLog(`[AI Analyzer] Initializing model: ${this.model}`);
+
+            
             try {
-                if (this.isGenerativeModel(this.model)) {
-                    // For generative models like Phi-3.5, use the specialized approach
-                    if (this.debugMode) {
-                        console.log('[AI Analyzer] Initializing generative model with AutoModelForCausalLM');
-                        console.log('[AI Analyzer] Model name:', this.model);
-                    }
                     
-                    try {
-                        // Initialize tokenizer and model separately for better control
-                        if (this.debugMode) {
-                            console.log('[AI Analyzer] Loading tokenizer...');
-                        }
-                        this.tokenizer = await AutoTokenizer.from_pretrained(this.model, {
-                            progress_callback: progressCallback,
-                        });
-                        
-                        if (this.debugMode) {
-                            console.log('[AI Analyzer] Tokenizer loaded, loading model...');
-                        }
-                        this.generativeModel = await AutoModelForCausalLM.from_pretrained(this.model, {
-                            dtype: "q4f16",
-                            use_external_data_format: true,
-                            progress_callback: progressCallback,
-                        });
-                        
-                        // Create a custom pipeline wrapper
-                        this.pipeline = {
-                            tokenizer: this.tokenizer,
-                            model: this.generativeModel,
-                            type: 'generative'
-                        };
-                        
-                        if (this.debugMode) {
-                            console.log('[AI Analyzer] Generative model initialized successfully');
-                        }
-                    } catch (error) {
-                        console.error('[AI Analyzer] Error initializing generative model:', error);
-                        throw error;
-                    }
-                } else {
-                    // For classification models, use the standard pipeline approach
-                    const task = this.getTaskType();
+                    debugLog(`[AI Analyzer] Initializing classification model`);
                     
-                    if (this.debugMode) {
-                        console.log(`[AI Analyzer] Initializing classification model with task: ${task}`);
-                    }
+                    this.pipeline = await pipeline('text-classification', this.model, { progress_callback: (progress) => {
+                        debugLog(`[AI Analyzer] Progress: ${progress}`);
+                    } });
                     
-                    this.pipeline = await pipeline(task, this.model, {
-                        progress_callback: progressCallback,
-                    });
-                    
-                    if (this.debugMode) {
-                        console.log('[AI Analyzer] Classification model initialized successfully');
-                    }
-                }
+                    debugLog('[AI Analyzer] Classification model initialized successfully');
                 
-                if (this.debugMode) {
-                    console.log('[AI Analyzer] Model pipeline initialized successfully.');
-                }
+                
+                debugLog('[AI Analyzer] Model pipeline initialized successfully.');
             } catch (error) {
                 console.error('[AI Analyzer] Fatal error during model initialization:', error);
                 throw error; // Re-throw to be caught by the worker's error handler
             }
 
-            if (this.debugMode) {
-                console.log('[AIAnalyzer] Initialization complete');
-            }
+            debugLog('[AIAnalyzer] Initialization complete');
         } catch (error) {
             console.error('Error initializing AI analyzer:', error);
             throw error;
@@ -133,38 +81,21 @@ export class AIAnalyzer {
         this.pipeline = null; // Clear existing pipeline
         this.tokenizer = null; // Clear tokenizer
         this.generativeModel = null; // Clear generative model
-        if (this.debugMode) {
-            console.log(`[AI Analyzer] Quantization changed to: ${this.quantization}`);
-        }
+        debugLog(`[AI Analyzer] Quantization changed to: ${this.quantization}`);
     }
 
-    // Determines the appropriate task type for the model
-    getTaskType() {
-        // Our custom commission detection model is a text-classification model
-        return 'text-classification';
-    }
 
-    // Determines if this is a model that should use AutoModelForCausalLM
-    isGenerativeModel() {
-        // Our custom DistilBERT model is not a generative model
-        return false;
-    }
 
     async analyze(text, context = 'bio') {
         try {
-            if (this.debugMode) {
-                console.log('[AIAnalyzer] Analyzing text:', { text, context });
-            }
+            debugLog('[AIAnalyzer] Analyzing text:', { text, context });
 
             if (!this.pipeline) {
                 throw new Error('Model not initialized. Call initialize() before analyzing.');
             }
 
-            if (this.pipeline.type === 'generative' || this.isGenerativeModel(this.model)) {
-                return await this.analyzeWithGeneration(text);
-            } else {
                 return await this.analyzeWithClassification(text);
-            }
+
         } catch (error) {
             console.error('Analysis error:', error);
             throw error;
@@ -174,21 +105,10 @@ export class AIAnalyzer {
     // Analyze using text classification models
     async analyzeWithClassification(text) {
         const result = await this.pipeline(text);
-        if (this.debugMode) {
-            console.log('[AI Analyzer] Classification result:', result);
-        }
-
-        // Apply temperature scaling to all results if temperature > 1
-        let scaledResults = result;
-        if (this.temperature !== 1.0) {
-            scaledResults = this.applyTemperatureScaling(result);
-            if (this.debugMode) {
-                console.log('[AI Analyzer] Temperature-scaled results:', scaledResults);
-            }
-        }
+        debugLog('[AI Analyzer] Classification result:', result);
 
         // The custom model outputs three labels: open, closed, unclear
-        const primaryResult = scaledResults[0];
+        const primaryResult = result[0];
         const label = primaryResult.label.toLowerCase();
         
         // Map the label to our result format
@@ -211,7 +131,7 @@ export class AIAnalyzer {
             confidence: primaryResult.score,
             method: 'ai-classification',
             triggers: this.findTriggerWords(text, commissionStatus),
-            allResults: scaledResults // Include all results for debugging
+            allResults: result // Include all results for debugging
         };
     }
     // Fallback pattern-matching analysis.
@@ -365,9 +285,7 @@ export class AIAnalyzer {
         // For display names, we want to be more aggressive with matching
         const baseConfidence = isDisplayName ? 0.95 : 0.9;
 
-        if (this.debugMode) {
-            console.log(`[AI Analyzer] Checking silver bullets in ${isDisplayName ? 'display name' : 'text'}:`, text);
-        }
+        debugLog(`[AI Analyzer] Checking silver bullets in ${isDisplayName ? 'display name' : 'text'}:`, text);
 
         // Check for both open and closed matches to find the most specific one
         let openMatch = null;
@@ -378,9 +296,7 @@ export class AIAnalyzer {
             const match = text.match(phrase);
             if (match) {
                 openMatch = match;
-                if (this.debugMode) {
-                    console.log('[AI Analyzer] Found OPEN silver bullet candidate:', match[0]);
-                }
+                debugLog('[AI Analyzer] Found OPEN silver bullet candidate:', match[0]);
                 break; // Use first match
             }
         }
@@ -390,18 +306,14 @@ export class AIAnalyzer {
             const match = text.match(phrase);
             if (match) {
                 closedMatch = match;
-                if (this.debugMode) {
-                    console.log('[AI Analyzer] Found CLOSED silver bullet candidate:', match[0]);
-                }
+                debugLog('[AI Analyzer] Found CLOSED silver bullet candidate:', match[0]);
                 break; // Use first match
             }
         }
 
         // If both open and closed matches exist, prioritize the more specific/stronger signal
         if (openMatch && closedMatch) {
-            if (this.debugMode) {
-                console.log('[AI Analyzer] Found both open and closed candidates, prioritizing closed (more decisive)');
-            }
+            debugLog('[AI Analyzer] Found both open and closed candidates, prioritizing closed (more decisive)');
             // "Closed" signals are generally more decisive than "open" signals
             // because artists usually announce when they're closed more explicitly
             return {
@@ -410,18 +322,14 @@ export class AIAnalyzer {
                 trigger: closedMatch[0]
             };
         } else if (closedMatch) {
-            if (this.debugMode) {
-                console.log('[AI Analyzer] Found CLOSED silver bullet:', closedMatch[0]);
-            }
+            debugLog('[AI Analyzer] Found CLOSED silver bullet:', closedMatch[0]);
             return {
                 type: 'closed',
                 confidence: baseConfidence * timeWeight,
                 trigger: closedMatch[0]
             };
         } else if (openMatch) {
-            if (this.debugMode) {
-                console.log('[AI Analyzer] Found OPEN silver bullet:', openMatch[0]);
-            }
+            debugLog('[AI Analyzer] Found OPEN silver bullet:', openMatch[0]);
             return {
                 type: 'open',
                 confidence: baseConfidence * timeWeight,
@@ -429,9 +337,7 @@ export class AIAnalyzer {
             };
         }
 
-        if (this.debugMode) {
-            console.log('[AI Analyzer] No silver bullets found in:', text);
-        }
+        debugLog('[AI Analyzer] No silver bullets found in:', text);
         return null;
     }
 
@@ -484,7 +390,7 @@ export class AIAnalyzer {
 
     // Calculate post score (for Bluesky posts)
     async analyzePost(post) {
-        // console.log('[AIAnalyzer] Starting post analysis:', post);
+        debugLog('[AIAnalyzer] Starting post analysis:', post);
 
         const postText = (post.text || '').trim();
         if (!postText) {
@@ -510,7 +416,7 @@ export class AIAnalyzer {
 
         // Regular analysis
         const result = await this.analyze(postText);
-        // console.log('[AIAnalyzer] Post analysis result:', result);
+        debugLog('[AIAnalyzer] Post analysis result:', result);
         
         return {
             score: this.getLabelScore(result),
@@ -604,7 +510,7 @@ export class AIAnalyzer {
 
         // Analyze commission status (base weight: 0.2)
         if (components.commissionStatus) {
-            console.log('[AIAnalyzer] Analyzing commission status component');
+            debugLog('[AIAnalyzer] Analyzing commission status component');
             const statusResult = await this.analyze(components.commissionStatus);
             results.commissionStatus = {
                 score: this.getLabelScore(statusResult),
@@ -621,7 +527,7 @@ export class AIAnalyzer {
 
         // Analyze journal (weight: 0.2 if recent, 0.1 if old)
         if (components.journal?.text) {
-            console.log('[AIAnalyzer] Analyzing journal component');
+            debugLog('[AIAnalyzer] Analyzing journal component');
             const timeWeight = this.calculateTimeWeight(components.journal.date);
             
             const silverBullet = this.checkSilverBullets(components.journal.text, components.journal.date);
@@ -654,7 +560,7 @@ export class AIAnalyzer {
 
         // Analyze gallery items (reduced weight for FurAffinity)
         if (components.galleryItems?.length > 0) {
-            console.log('[AIAnalyzer] Analyzing gallery items:', components.galleryItems);
+            debugLog('[AIAnalyzer] Analyzing gallery items:', components.galleryItems);
             const galleryResults = [];
             let galleryScore = 0;
             let galleryConfidence = 0;

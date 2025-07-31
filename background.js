@@ -32,14 +32,7 @@ async function initializeAnalyzer() {
                 temperature: modelTemperature
             });
             
-            await aiAnalyzer.initialize((progress) => {
-                // console.log('[Background] Model loading progress:', progress);
-                // Send progress to popup if needed
-                chrome.runtime.sendMessage({
-                    type: 'MODEL_LOAD_PROGRESS',
-                    data: progress
-                }).catch(() => {}); // Ignore if popup is closed
-            });
+            await aiAnalyzer.initialize();
             
             analyzerInitialized = true;
             debugLog('[Background] AI Analyzer initialized successfully');

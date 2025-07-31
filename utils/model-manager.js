@@ -88,26 +88,26 @@ export function getModelName() {
   return MODEL_NAME;
 }
 
-async function hasWebGPU() {
-  // returns 0 for webgpu with f16, 1 for webgpu without f16, 2 for no webgpu
-  // Check if we're in a service worker context where navigator might not be available
-  if (typeof navigator === 'undefined' || !("gpu" in navigator)) {
-    console.log('No WebGPU detected (service worker or no GPU support), using WASM only');
-    return 2;
-  }
-  try {
-    const adapter = await navigator.gpu.requestAdapter()
-    if (adapter.features.has('shader-f16')) {
-      console.log('WebGPU detected with f16, using WebGPU');
-      return 0;
-    }
-    console.log('WebGPU detected without f16, using WebGPU');
-    return 1;
-  } catch (e) {
-    console.warn('WebGPU detection failed:', e);
-    return 2;
-  }
-}
+// async function hasWebGPU() {
+//   // returns 0 for webgpu with f16, 1 for webgpu without f16, 2 for no webgpu
+//   // Check if we're in a service worker context where navigator might not be available
+//   if (typeof navigator === 'undefined' || !("gpu" in navigator)) {
+//     console.log('No WebGPU detected (service worker or no GPU support), using WASM only');
+//     return 2;
+//   }
+//   try {
+//     const adapter = await navigator.gpu.requestAdapter()
+//     if (adapter.features.has('shader-f16')) {
+//       console.log('WebGPU detected with f16, using WebGPU');
+//       return 0;
+//     }
+//     console.log('WebGPU detected without f16, using WebGPU');
+//     return 1;
+//   } catch (e) {
+//     console.warn('WebGPU detection failed:', e);
+//     return 2;
+//   }
+// }
 
 /**
  * Gets the model display name
@@ -149,7 +149,7 @@ export function getModelConfig(quantizationType = currentQuantization) {
       numThreads: 1,
       simd: true,
       proxy: false,
-      initTimeout: 30000
+      initTimeout: 15000
     }
   }
 
