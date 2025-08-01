@@ -1,29 +1,18 @@
 // AI-powered text analyzer for commission detection
 // This script contains the core AI logic and is designed to run inside a Web Worker.
 
-import { pipeline, env } from '@xenova/transformers';
+import * as ort from 'onnxruntime-web';
+import { DistilBertTokenizer } from './tokenizer.js';
 import { debugLog } from './shared.js';
 
-// Configure transformers.js environment for the extension
-// These settings are safe to be set in the worker.
-env.allowLocalModels = false;
-env.useCustomCache = true;
-env.useBrowserCache = true;
+// Configure ONNX Runtime for the extension environment
+// Enable multi-threading for significant performance boost
+ort.env.wasm.numThreads = 0; // Let ORT decide optimal thread count
+ort.env.wasm.simd = true;
+ort.env.wasm.proxy = true; // Enable proxy worker for better UI responsiveness
+ort.env.wasm.wasmPaths = '../onnxruntime-web/';
 
-// Since we are running in a Chrome extension, we must configure the transformers.js library
-// to use the local paths to the onnxruntime-web worker files.
-// The wasm proxy is disabled because it creates a worker from a blob, which violates
-// the Content Security Policy of Manifest V3 extensions. The wasm compilation will
-// happen in our own worker, which is fine.
-env.backends.onnx.wasm = {
-  // Enable multithreading with 4 threads (0 means use all available cores)
-  numThreads: 1,
-  // Disable proxy worker since it's not compatible with Chrome extension CSP
-  proxy: false,
-  // Set paths relative to the worker's location in /dist/utils/
-  wasmPaths: '../onnxruntime-web/',
 
-};
 
 // The primary class for performing AI analysis.
 export class AIAnalyzer {
@@ -36,36 +25,57 @@ export class AIAnalyzer {
         this.modelConfig = null;
         this.modelTemperature = options.temperature || 1.0;
         this.debugMode = false;
-        this.pipeline = null;
+        this.session = null;
+        this.tokenizer = null;
+        this.labelMapping = {
+            'LABEL_0': 'open',
+            'LABEL_1': 'closed', 
+            'LABEL_2': 'unclear'
+        };
         this.initialize();
     }
     
 
     async initialize() {        
         try {
-                debugLog('[AIAnalyzer] Initializing...');
+            debugLog('[AIAnalyzer] Initializing...');
 
-            if (this.pipeline) {
+            if (this.session && this.tokenizer) {
                 debugLog('[AI Analyzer] Model is already initialized.');
+                return;
             }
-                debugLog(`[AI Analyzer] Initializing model: ${this.model}`);
+            debugLog(`[AI Analyzer] Initializing model: ${this.model}`);
 
-            
             try {
-                    
-                    debugLog(`[AI Analyzer] Initializing classification model`);
-                    
-                    this.pipeline = await pipeline('text-classification', this.model, { progress_callback: (progress) => {
-                        debugLog(`[AI Analyzer] Progress: ${progress}`);
-                    } });
-                    
-                    debugLog('[AI Analyzer] Classification model initialized successfully');
+                debugLog(`[AI Analyzer] Initializing tokenizer...`);
+                // Initialize tokenizer
+                this.tokenizer = new DistilBertTokenizer();
+                await this.tokenizer.initialize(this.model);
+                debugLog('[AI Analyzer] Tokenizer initialized successfully');
+
+                // Get model path for the current quantization
+                const modelPath = this.getModelPath();
+                debugLog(`[AI Analyzer] Loading ONNX model: ${modelPath}`);
+
+                // Create inference session with optimizations
+                const sessionOptions = {
+                    executionProviders: this.getExecutionProviders(),
+                    graphOptimizationLevel: 'all',
+                    enableCpuMemArena: true,
+                    enableMemPattern: true,
+                    logSeverityLevel: 2, // Warning level
+                    logVerbosityLevel: 0,
+                };
+
+                this.session = await ort.InferenceSession.create(modelPath, sessionOptions);
+                debugLog('[AI Analyzer] ONNX model loaded successfully');
+                debugLog('[AI Analyzer] Model inputs:', this.session.inputNames);
+                debugLog('[AI Analyzer] Model outputs:', this.session.outputNames);
                 
-                
-                debugLog('[AI Analyzer] Model pipeline initialized successfully.');
+                debugLog('[AI Analyzer] Model initialization complete.');
             } catch (error) {
                 console.error('[AI Analyzer] Fatal error during model initialization:', error);
-                throw error; // Re-throw to be caught by the worker's error handler
+                throw error;
             }
 
             debugLog('[AIAnalyzer] Initialization complete');
@@ -75,12 +85,49 @@ export class AIAnalyzer {
         }
     }
 
-    // Sets a new quantization and clears the existing pipeline
+    // Get the model path based on current quantization
+    getModelPath() {
+        const quantizations = {
+            'full': 'onnx/model.onnx',
+            'fp16': 'onnx/model_fp16.onnx', 
+            'quantized': 'onnx/model_quantized.onnx',
+            'int8': 'onnx/model_int8.onnx',
+            'uint8': 'onnx/model_uint8.onnx', // Recommended for CPU
+            'q4f16': 'onnx/model_q4f16.onnx',
+            'bnb4': 'onnx/model_bnb4.onnx',
+            'q4': 'onnx/model_q4.onnx'
+        };
+        
+        const modelFile = quantizations[this.quantization] || quantizations['quantized'];
+        // TODO: Implement local caching via Cache API or IndexedDB
+        // For now, direct HuggingFace loading (consider caching for production)
+        return `https://huggingface.co/${this.model}/resolve/main/${modelFile}`;
+    }
+
+    // Get execution providers based on environment
+    getExecutionProviders() {
+        const providers = ['wasm'];
+        
+        // Only try WebGPU if we're not in a service worker context
+        // Service workers don't support dynamic imports required by WebGPU backend
+        const isServiceWorker = typeof importScripts === 'function';
+        
+        if (isServiceWorker) {
+            debugLog('[AI Analyzer] Service worker context detected, using WASM backend only');
+        } else if (typeof navigator !== 'undefined' && navigator.gpu) {
+            debugLog('[AI Analyzer] WebGPU available, adding to execution providers');
+            providers.unshift('webgpu');
+        }
+        
+        debugLog('[AI Analyzer] Using execution providers:', providers);
+        return providers;
+    }
+
+    // Sets a new quantization and clears the existing session
     setQuantization(quantizationType) {
         this.quantization = quantizationType;
-        this.pipeline = null; // Clear existing pipeline
+        this.session = null; // Clear existing session
         this.tokenizer = null; // Clear tokenizer
-        this.generativeModel = null; // Clear generative model
         debugLog(`[AI Analyzer] Quantization changed to: ${this.quantization}`);
     }
 
@@ -90,11 +137,11 @@ export class AIAnalyzer {
         try {
             debugLog('[AIAnalyzer] Analyzing text:', { text, context });
 
-            if (!this.pipeline) {
+            if (!this.session || !this.tokenizer) {
                 throw new Error('Model not initialized. Call initialize() before analyzing.');
             }
 
-                return await this.analyzeWithClassification(text);
+            return await this.analyzeWithClassification(text);
 
         } catch (error) {
             console.error('Analysis error:', error);
@@ -102,37 +149,210 @@ export class AIAnalyzer {
         }
     }
 
-    // Analyze using text classification models
-    async analyzeWithClassification(text) {
-        const result = await this.pipeline(text);
-        debugLog('[AI Analyzer] Classification result:', result);
+    // Batch analysis for multiple texts - much faster than individual calls
+    async batchAnalyze(texts) {
+        try {
+            debugLog('[AIAnalyzer] Batch analyzing texts:', texts.length);
 
-        // The custom model outputs three labels: open, closed, unclear
-        const primaryResult = result[0];
-        const label = primaryResult.label.toLowerCase();
-        
-        // Map the label to our result format
-        let commissionStatus;
-        
-        if (label === 'open' || label === 'label_0') { // LABEL_0 might be open
-            commissionStatus = 'open';
-        } else if (label === 'closed' || label === 'label_1') { // LABEL_1 might be closed
-            commissionStatus = 'closed';
-        } else if (label === 'unclear' || label === 'label_2') { // LABEL_2 might be unclear
-            commissionStatus = 'unclear';
-        } else {
-            // Fallback for unexpected labels
-            console.warn(`[AI Analyzer] Unexpected label: ${label}`);
-            commissionStatus = 'unclear';
+            if (!this.session || !this.tokenizer) {
+                throw new Error('Model not initialized. Call initialize() before analyzing.');
+            }
+
+            if (!texts || texts.length === 0) {
+                return [];
+            }
+
+            // Process texts in smaller batches to avoid memory issues
+            const batchSize = 8; // Adjust based on your model's memory requirements
+            const results = [];
+
+            for (let i = 0; i < texts.length; i += batchSize) {
+                const batch = texts.slice(i, i + batchSize);
+                const batchResults = await this.processBatch(batch);
+                results.push(...batchResults);
+            }
+
+            return results;
+
+        } catch (error) {
+            console.error('Batch analysis error:', error);
+            throw error;
+        }
+    }
+
+    async processBatch(texts) {
+        // Tokenize all texts in the batch
+        const encodedBatch = texts.map(text => 
+            this.tokenizer.encode(text, {
+                maxLength: 512,
+                padding: true,
+                truncation: true,
+                addSpecialTokens: true
+            })
+        );
+
+        // Find the maximum length for padding
+        const maxLength = Math.max(...encodedBatch.map(encoded => encoded.input_ids.length));
+
+        // Pad all sequences to the same length
+        const batchInputIds = [];
+        const batchAttentionMasks = [];
+
+        for (const encoded of encodedBatch) {
+            const paddedInputIds = [...encoded.input_ids];
+            const paddedAttentionMask = [...encoded.attention_mask];
+            
+            // Pad to max length
+            while (paddedInputIds.length < maxLength) {
+                paddedInputIds.push(0); // PAD token
+                paddedAttentionMask.push(0);
+            }
+            
+            batchInputIds.push(...paddedInputIds);
+            batchAttentionMasks.push(...paddedAttentionMask);
         }
 
-        return {
-            commissionStatus,
-            confidence: primaryResult.score,
-            method: 'ai-classification',
-            triggers: this.findTriggerWords(text, commissionStatus),
-            allResults: result // Include all results for debugging
+        // Create batch tensors
+        const inputTensor = new ort.Tensor('int64', 
+            new BigInt64Array(batchInputIds.map(id => BigInt(id))), 
+            [texts.length, maxLength]
+        );
+        const attentionMaskTensor = new ort.Tensor('int64', 
+            new BigInt64Array(batchAttentionMasks.map(mask => BigInt(mask))), 
+            [texts.length, maxLength]
+        );
+
+        const feeds = {
+            input_ids: inputTensor,
+            attention_mask: attentionMaskTensor
         };
+
+        debugLog('[AIAnalyzer] Running batch ONNX inference...');
+        
+        // Run batch inference
+        const results = await this.session.run(feeds);
+        
+        // Process batch results
+        const logits = results.logits.data;
+        const numClasses = 3; // LABEL_0, LABEL_1, LABEL_2
+        const batchResults = [];
+
+        for (let i = 0; i < texts.length; i++) {
+            const startIdx = i * numClasses;
+            const endIdx = startIdx + numClasses;
+            const textLogits = Array.from(logits.slice(startIdx, endIdx));
+            
+            const probabilities = this.softmax(textLogits);
+            
+            const formattedResults = probabilities.map((score, index) => ({
+                label: `LABEL_${index}`,
+                score: score
+            }));
+
+            formattedResults.sort((a, b) => b.score - a.score);
+            
+            const primaryResult = formattedResults[0];
+            const commissionStatus = this.labelMapping[primaryResult.label] || 'unclear';
+
+            batchResults.push({
+                commissionStatus,
+                confidence: primaryResult.score,
+                method: 'ai-classification-batch',
+                triggers: this.findTriggerWords(texts[i], commissionStatus),
+                allResults: formattedResults
+            });
+        }
+
+        return batchResults;
+    }
+
+    // Analyze using ONNX Runtime inference
+    async analyzeWithClassification(text) {
+        try {
+            // Tokenize the input text
+            const encoded = this.tokenizer.encode(text, {
+                maxLength: 512,
+                padding: true,
+                truncation: true,
+                addSpecialTokens: true
+            });
+
+            debugLog('[AI Analyzer] Tokenized input:', {
+                inputIds: encoded.input_ids.slice(0, 10), // Log first 10 tokens
+                length: encoded.input_ids.length
+            });
+
+            // Prepare inputs for ONNX Runtime
+            const inputTensor = new ort.Tensor('int64', new BigInt64Array(encoded.input_ids.map(id => BigInt(id))), [1, encoded.input_ids.length]);
+            const attentionMaskTensor = new ort.Tensor('int64', new BigInt64Array(encoded.attention_mask.map(mask => BigInt(mask))), [1, encoded.attention_mask.length]);
+
+            const feeds = {
+                input_ids: inputTensor,
+                attention_mask: attentionMaskTensor
+            };
+
+            debugLog('[AI Analyzer] Running ONNX inference...');
+            
+            // Run inference
+            const results = await this.session.run(feeds);
+            
+            // Get logits from the output
+            const logits = results.logits.data;
+            debugLog('[AI Analyzer] Raw logits:', Array.from(logits));
+
+            // Apply softmax to get probabilities
+            const probabilities = this.softmax(Array.from(logits));
+            debugLog('[AI Analyzer] Probabilities:', probabilities);
+
+            // Create result in the same format as transformers.js
+            const formattedResults = probabilities.map((score, index) => ({
+                label: `LABEL_${index}`,
+                score: score
+            }));
+
+            // Sort by score (highest first)
+            formattedResults.sort((a, b) => b.score - a.score);
+
+            debugLog('[AI Analyzer] Classification result:', formattedResults);
+
+            // The custom model outputs three labels: LABEL_0 (open), LABEL_1 (closed), LABEL_2 (unclear)
+            const primaryResult = formattedResults[0];
+            const label = primaryResult.label;
+            
+            // Map the label to our result format
+            let commissionStatus;
+            
+            if (label === 'LABEL_0') {
+                commissionStatus = 'open';
+            } else if (label === 'LABEL_1') {
+                commissionStatus = 'closed';
+            } else if (label === 'LABEL_2') {
+                commissionStatus = 'unclear';
+            } else {
+                // Fallback for unexpected labels
+                console.warn(`[AI Analyzer] Unexpected label: ${label}`);
+                commissionStatus = 'unclear';
+            }
+
+            return {
+                commissionStatus,
+                confidence: primaryResult.score,
+                method: 'ai-classification',
+                triggers: this.findTriggerWords(text, commissionStatus),
+                allResults: formattedResults // Include all results for debugging
+            };
+        } catch (error) {
+            console.error('[AI Analyzer] Error in ONNX inference:', error);
+            throw error;
+        }
+    }
+
+    // Apply softmax function to convert logits to probabilities
+    softmax(logits) {
+        const maxLogit = Math.max(...logits);
+        const expValues = logits.map(x => Math.exp(x - maxLogit));
+        const sumExp = expValues.reduce((sum, val) => sum + val, 0);
+        return expValues.map(val => val / sumExp);
     }
     // Fallback pattern-matching analysis.
     fallbackAnalysis(text) {
@@ -430,7 +650,7 @@ export class AIAnalyzer {
 
     // Analyze individual components and combine scores
     async analyzeComponents(components) {
-        if (!this.pipeline) {
+        if (!this.session || !this.tokenizer) {
             throw new Error('Model not initialized. Call initialize() before analyzing.');
         }
 
@@ -450,9 +670,13 @@ export class AIAnalyzer {
         let highestConfidence = 0;
         let hasSilverBullet = false;
 
-        // Analyze display name (base weight: 0.3)
+        // Collect all texts that need AI analysis (non-silver bullet)
+        const textsToAnalyze = [];
+        const textMeta = [];
+
+        // Process display name
         if (components.displayName) {
-            debugLog('[AIAnalyzer] Analyzing display name component');
+            debugLog('[AIAnalyzer] Processing display name component');
             const silverBullet = this.checkSilverBullets(components.displayName, Date.now(), true);
             if (silverBullet) {
                 results.displayName = {
@@ -464,24 +688,14 @@ export class AIAnalyzer {
                 };
                 hasSilverBullet = true;
             } else {
-                const displayNameResult = await this.analyze(components.displayName);
-                results.displayName = {
-                    score: this.getLabelScore(displayNameResult),
-                    confidence: displayNameResult.confidence,
-                    commissionStatus: displayNameResult.commissionStatus
-                };
+                textsToAnalyze.push(components.displayName);
+                textMeta.push({ type: 'displayName', weight: 0.3 });
             }
-            
-            const displayNameWeight = results.displayName.isSilverBullet ? 0.4 : 0.3;
-            weightedScore += results.displayName.score * displayNameWeight;
-            totalWeight += displayNameWeight;
-            highestConfidence = Math.max(highestConfidence, results.displayName.confidence);
-            debugLog('[AIAnalyzer] Display name analysis result:', results.displayName);
         }
 
-        // Analyze bio (increased base weight: 0.4)
+        // Process bio
         if (components.bio) {
-            debugLog('[AIAnalyzer] Analyzing bio component');
+            debugLog('[AIAnalyzer] Processing bio component');
             const silverBullet = this.checkSilverBullets(components.bio, Date.now());
             if (silverBullet) {
                 results.bio = {
@@ -493,41 +707,21 @@ export class AIAnalyzer {
                 };
                 hasSilverBullet = true;
             } else {
-                const bioResult = await this.analyze(components.bio);
-                results.bio = {
-                    score: this.getLabelScore(bioResult),
-                    confidence: bioResult.confidence,
-                    commissionStatus: bioResult.commissionStatus
-                };
+                textsToAnalyze.push(components.bio);
+                textMeta.push({ type: 'bio', weight: 0.4 });
             }
-            
-            const bioWeight = results.bio.isSilverBullet ? 0.5 : 0.4;
-            weightedScore += results.bio.score * bioWeight;
-            totalWeight += bioWeight;
-            highestConfidence = Math.max(highestConfidence, results.bio.confidence);
-            debugLog('[AIAnalyzer] Bio analysis result:', results.bio);
         }
 
-        // Analyze commission status (base weight: 0.2)
+        // Process commission status
         if (components.commissionStatus) {
-            debugLog('[AIAnalyzer] Analyzing commission status component');
-            const statusResult = await this.analyze(components.commissionStatus);
-            results.commissionStatus = {
-                score: this.getLabelScore(statusResult),
-                confidence: statusResult.confidence,
-                commissionStatus: statusResult.commissionStatus
-            };
-            
-            const statusWeight = 0.2;
-            weightedScore += results.commissionStatus.score * statusWeight;
-            totalWeight += statusWeight;
-            highestConfidence = Math.max(highestConfidence, results.commissionStatus.confidence);
-            debugLog('[AIAnalyzer] Commission status analysis result:', results.commissionStatus);
+            debugLog('[AIAnalyzer] Processing commission status component');
+            textsToAnalyze.push(components.commissionStatus);
+            textMeta.push({ type: 'commissionStatus', weight: 0.2 });
         }
 
-        // Analyze journal (weight: 0.2 if recent, 0.1 if old)
+        // Process journal
         if (components.journal?.text) {
-            debugLog('[AIAnalyzer] Analyzing journal component');
+            debugLog('[AIAnalyzer] Processing journal component');
             const timeWeight = this.calculateTimeWeight(components.journal.date);
             
             const silverBullet = this.checkSilverBullets(components.journal.text, components.journal.date);
@@ -542,57 +736,144 @@ export class AIAnalyzer {
                 };
                 hasSilverBullet = true;
             } else {
-                const journalResult = await this.analyze(components.journal.text);
-                results.journal = {
-                    score: this.getLabelScore(journalResult),
-                    confidence: journalResult.confidence,
-                    commissionStatus: journalResult.commissionStatus,
+                textsToAnalyze.push(components.journal.text);
+                textMeta.push({ 
+                    type: 'journal', 
+                    weight: 0.2 * timeWeight,
                     isPinned: components.journal.isPinned || false
-                };
+                });
             }
-            
-            const journalWeight = (results.journal.isSilverBullet ? 0.3 : 0.2) * timeWeight;
-            weightedScore += results.journal.score * journalWeight;
-            totalWeight += journalWeight;
-            highestConfidence = Math.max(highestConfidence, results.journal.confidence);
-            debugLog('[AIAnalyzer] Journal analysis result:', results.journal);
         }
 
-        // Analyze gallery items (reduced weight for FurAffinity)
+        // Process gallery items in batch
         if (components.galleryItems?.length > 0) {
-            debugLog('[AIAnalyzer] Analyzing gallery items:', components.galleryItems);
+            debugLog('[AIAnalyzer] Processing gallery items');
+            for (const item of components.galleryItems) {
+                if (item.title) {
+                    textsToAnalyze.push(item.title);
+                    textMeta.push({ 
+                        type: 'galleryItem', 
+                        item: item,
+                        timeWeight: this.calculateTimeWeight(new Date(item.date).getTime())
+                    });
+                }
+            }
+        }
+
+        // Process posts in batch
+        if (components.posts?.length > 0) {
+            debugLog('[AIAnalyzer] Processing posts');
+            for (const post of components.posts) {
+                if (post.text) {
+                    textsToAnalyze.push(post.text);
+                    textMeta.push({ 
+                        type: 'post', 
+                        post: post,
+                        timeWeight: this.calculateTimeWeight(new Date(post.date).getTime())
+                    });
+                }
+            }
+        }
+
+        // Batch analyze all collected texts
+        let batchResults = [];
+        if (textsToAnalyze.length > 0) {
+            debugLog(`[AIAnalyzer] Batch analyzing ${textsToAnalyze.length} texts`);
+            batchResults = await this.batchAnalyze(textsToAnalyze);
+        }
+
+        // Process batch results
+        let batchIndex = 0;
+        for (const meta of textMeta) {
+            const result = batchResults[batchIndex++];
+            
+            switch (meta.type) {
+                case 'displayName': {
+                    results.displayName = {
+                        score: this.getLabelScore(result),
+                        confidence: result.confidence,
+                        commissionStatus: result.commissionStatus
+                    };
+                    const displayNameWeight = 0.3;
+                    weightedScore += results.displayName.score * displayNameWeight;
+                    totalWeight += displayNameWeight;
+                    highestConfidence = Math.max(highestConfidence, results.displayName.confidence);
+                    break;
+                }
+
+                case 'bio': {
+                    results.bio = {
+                        score: this.getLabelScore(result),
+                        confidence: result.confidence,
+                        commissionStatus: result.commissionStatus
+                    };
+                    const bioWeight = 0.4;
+                    weightedScore += results.bio.score * bioWeight;
+                    totalWeight += bioWeight;
+                    highestConfidence = Math.max(highestConfidence, results.bio.confidence);
+                    break;
+                }
+
+                case 'commissionStatus': {
+                    results.commissionStatus = {
+                        score: this.getLabelScore(result),
+                        confidence: result.confidence,
+                        commissionStatus: result.commissionStatus
+                    };
+                    const statusWeight = 0.2;
+                    weightedScore += results.commissionStatus.score * statusWeight;
+                    totalWeight += statusWeight;
+                    highestConfidence = Math.max(highestConfidence, results.commissionStatus.confidence);
+                    break;
+                }
+
+                case 'journal': {
+                    results.journal = {
+                        score: this.getLabelScore(result),
+                        confidence: result.confidence,
+                        commissionStatus: result.commissionStatus,
+                        isPinned: meta.isPinned
+                    };
+                    weightedScore += results.journal.score * meta.weight;
+                    totalWeight += meta.weight;
+                    highestConfidence = Math.max(highestConfidence, results.journal.confidence);
+                    break;
+                }
+            }
+        }
+
+        // Process gallery and post results after main components
+        if (components.galleryItems?.length > 0) {
             const galleryResults = [];
             let galleryScore = 0;
             let galleryConfidence = 0;
             let recentItemCount = 0;
             let galleryStatus = 'unclear';
 
-            // Analyze each gallery item
-            for (const item of components.galleryItems) {
-                const itemResult = await this.analyzeGalleryItem(item);
-                debugLog('[AIAnalyzer] Gallery item analysis result:', itemResult);
-                if (itemResult) {
-                    const timeWeight = this.calculateTimeWeight(new Date(item.date).getTime());
+            // Find gallery items in batch results
+            for (let i = 0; i < textMeta.length; i++) {
+                const meta = textMeta[i];
+                if (meta.type === 'galleryItem') {
+                    const result = batchResults[i];
                     galleryResults.push({
-                        title: item.title || '',
-                        url: item.url || '',
-                        date: item.date || '',
-                        ...itemResult,
-                        timeWeight
+                        title: meta.item.title || '',
+                        url: meta.item.url || '',
+                        date: meta.item.date || '',
+                        score: this.getLabelScore(result),
+                        confidence: result.confidence,
+                        commissionStatus: result.commissionStatus,
+                        timeWeight: meta.timeWeight
                     });
                     
-                    // Weight more recent items higher
-                    galleryScore += itemResult.score * timeWeight;
-                    galleryConfidence = Math.max(galleryConfidence, itemResult.confidence);
-                    if (timeWeight > 0.5) recentItemCount++;
+                    galleryScore += this.getLabelScore(result) * meta.timeWeight;
+                    galleryConfidence = Math.max(galleryConfidence, result.confidence);
+                    if (meta.timeWeight > 0.5) recentItemCount++;
                 }
             }
 
             if (galleryResults.length > 0) {
-                // Normalize gallery score
                 galleryScore /= galleryResults.length;
                 
-                // Determine overall gallery status
                 if (galleryScore > 0.2) {
                     galleryStatus = 'open';
                 } else if (galleryScore < -0.2) {
@@ -606,65 +887,58 @@ export class AIAnalyzer {
                     commissionStatus: galleryStatus
                 };
 
-                // Gallery weight depends on recency of items
                 const galleryWeight = recentItemCount > 0 ? 0.15 : 0.1;
                 weightedScore += galleryScore * galleryWeight;
                 totalWeight += galleryWeight;
                 highestConfidence = Math.max(highestConfidence, galleryConfidence);
-                debugLog('[AIAnalyzer] Gallery analysis complete:', results.gallery);
             }
         }
 
-        // Analyze posts (reduced weight for Bluesky)
+        // Process posts results
         if (components.posts?.length > 0) {
-            debugLog('[AIAnalyzer] Analyzing posts:', components.posts);
             const postResults = [];
             let postsScore = 0;
             let postsConfidence = 0;
             let recentPostCount = 0;
             let postsStatus = 'unclear';
-            let totalPostWeight = 0; // Track total weight for proper normalization
+            let totalPostWeight = 0;
             let hasPinnedPost = false;
 
-            // Analyze each post
-            for (const post of components.posts) {
-                const postResult = await this.analyzePost(post);
-                // console.log('[AIAnalyzer] Post analysis result:', postResult);
-                if (postResult) {
-                    const timeWeight = this.calculateTimeWeight(new Date(post.date).getTime());
+            // Find post items in batch results
+            for (let i = 0; i < textMeta.length; i++) {
+                const meta = textMeta[i];
+                if (meta.type === 'post') {
+                    const result = batchResults[i];
                     
-                    // Apply 3x weight for pinned posts (but only for open/closed, not unclear)
-                    let postWeight = timeWeight;
-                    if (post.isPinned && postResult.commissionStatus !== 'unclear') {
+                    let postWeight = meta.timeWeight;
+                    if (meta.post.isPinned && result.commissionStatus !== 'unclear') {
                         postWeight *= 3;
                         hasPinnedPost = true;
-                        debugLog('[AIAnalyzer] Applying 3x weight to pinned post with status:', postResult.commissionStatus);
                     }
                     
                     postResults.push({
-                        text: post.text || '',
-                        url: post.url || '',
-                        date: post.date || '',
-                        engagement: post.engagement || {},
-                        isPinned: post.isPinned || false,
-                        ...postResult,
-                        timeWeight,
-                        effectiveWeight: postWeight
+                        text: meta.post.text || '',
+                        url: meta.post.url || '',
+                        date: meta.post.date || '',
+                        engagement: meta.post.engagement || {},
+                        isPinned: meta.post.isPinned || false,
+                        score: this.getLabelScore(result),
+                        confidence: result.confidence,
+                        commissionStatus: result.commissionStatus,
+                        timeWeight: meta.timeWeight,
+                        postWeight: postWeight
                     });
                     
-                    // Weight posts based on their effective weight
-                    postsScore += postResult.score * postWeight;
+                    postsScore += this.getLabelScore(result) * postWeight;
                     totalPostWeight += postWeight;
-                    postsConfidence = Math.max(postsConfidence, postResult.confidence);
-                    if (timeWeight > 0.5) recentPostCount++;
+                    postsConfidence = Math.max(postsConfidence, result.confidence);
+                    if (meta.timeWeight > 0.5) recentPostCount++;
                 }
             }
 
-            if (postResults.length > 0) {
-                // Normalize posts score based on total weight
-                postsScore = totalPostWeight > 0 ? postsScore / totalPostWeight : 0;
+            if (postResults.length > 0 && totalPostWeight > 0) {
+                postsScore /= totalPostWeight;
                 
-                // Determine overall posts status
                 if (postsScore > 0.2) {
                     postsStatus = 'open';
                 } else if (postsScore < -0.2) {
@@ -675,20 +949,20 @@ export class AIAnalyzer {
                     items: postResults,
                     score: postsScore,
                     confidence: postsConfidence,
-                    commissionStatus: postsStatus
+                    commissionStatus: postsStatus,
+                    hasPinnedPost: hasPinnedPost
                 };
 
-                // Posts weight depends on recency and whether there's a pinned post
-                const basePostsWeight = recentPostCount > 0 ? 0.15 : 0.1;
-                const postsWeight = hasPinnedPost ? basePostsWeight * 1.5 : basePostsWeight; // Increase overall posts weight if there's a pinned post
+                let postsWeight = recentPostCount > 0 ? 0.25 : 0.15;
+                if (hasPinnedPost) postsWeight *= 1.5;
+                
                 weightedScore += postsScore * postsWeight;
                 totalWeight += postsWeight;
                 highestConfidence = Math.max(highestConfidence, postsConfidence);
-                // console.log('[AIAnalyzer] Posts analysis complete:', results.posts);
             }
-        } else {
-            debugLog('[AIAnalyzer] No posts to analyze');
         }
+
+        // Continue with final score calculation
 
         // Normalize final score to -1 to 1 range
         const normalizedScore = totalWeight > 0 ? weightedScore / totalWeight : 0;

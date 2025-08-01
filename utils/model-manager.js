@@ -156,7 +156,9 @@ export function getModelConfig(quantizationType = currentQuantization) {
   // Add WebGPU config if available
   // Note: hasWebGPU is async but we can't make getModelConfig async due to usage patterns
   // In service worker context, WebGPU is typically not available anyway
-  if (typeof navigator !== 'undefined' && "gpu" in navigator) {
+  const isServiceWorker = typeof importScripts === 'function';
+  
+  if (!isServiceWorker && typeof navigator !== 'undefined' && "gpu" in navigator) {
     // Only try WebGPU if we're not in a service worker context
     config.executionProviders = ['webgpu'];
     config.enableGraphCapture = true;

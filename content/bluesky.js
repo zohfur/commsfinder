@@ -648,6 +648,8 @@ async function scanBluesky(existingProgress = null) {
             });
         }
         
+        const results = [];
+        
         // Scan each user, starting from the saved index
         for (let i = startIndex; i < following.length; i++) {
             const user = following[i];
@@ -661,18 +663,30 @@ async function scanBluesky(existingProgress = null) {
             const artistData = await getUserProfileAndPosts(user.did, user.handle);
             
             if (artistData) {
-                // Send to AI analyzer
-                const analysisRequest = {
-                    type: 'analyze_components',
-                    components: formatDataForAnalysis(artistData),
-                    context: 'bluesky_profile',
-                    metadata: artistData
-                };
-                
-                console.log('[Bluesky] Sending analysis request:', analysisRequest);
+                try {
+                    // Send to AI analyzer
+                    const analysisRequest = {
+                        type: 'analyze_components',
+                        components: formatDataForAnalysis(artistData),
+                        context: 'bluesky_profile',
+                        metadata: artistData
+                    };
+                    
+                    console.log('[Bluesky] Sending analysis request:', analysisRequest);
 
-                chrome.runtime.sendMessage(analysisRequest, (response) => {
+                    // Convert to Promise-based approach
+                    const response = await new Promise((resolve, reject) => {
+                        chrome.runtime.sendMessage(analysisRequest, (response) => {
+                            if (chrome.runtime.lastError) {
+                                reject(new Error(chrome.runtime.lastError.message));
+                                return;
+                            }
+                            resolve(response);
+                        });
+                    });
+
                     console.log('[Bluesky] Received analysis response:', response);
+                    
                     if (response && response.success) {
                         const result = {
                             ...artistData,
@@ -684,6 +698,9 @@ async function scanBluesky(existingProgress = null) {
                         
                         console.log('[Bluesky] Final artist result:', result);
                         
+                        // Add to results array for local tracking
+                        results.push(result);
+                        
                         // Report found artist
                         chrome.runtime.sendMessage({
                             type: 'ARTIST_FOUND',
@@ -694,7 +711,9 @@ async function scanBluesky(existingProgress = null) {
                     } else {
                         console.error('[Bluesky] Analysis failed:', response?.error || 'Unknown error');
                     }
-                });
+                } catch (error) {
+                    console.error('[Bluesky] Analysis request failed:', error);
+                }
             }
             
             await rateLimitedDelay();
@@ -710,7 +729,7 @@ async function scanBluesky(existingProgress = null) {
         chrome.runtime.sendMessage({
             type: 'SCAN_COMPLETE',
             platform: 'bluesky',
-            results: [] // Send empty results array to match expected signature
+            results: results
         }).catch(error => {
             console.warn('[Bluesky] Failed to send scan complete message:', error);
         });

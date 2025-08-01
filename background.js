@@ -1,17 +1,15 @@
 // Background Service Worker
 import { getExecutionContext, debugLog } from './utils/shared.js';
 import { isModelCached, downloadAndCacheModel, setCurrentQuantization, getCurrentQuantization } from './utils/model-manager.js';
-import { AIAnalyzer } from './utils/ai-analyzer.js';
 
-// AI Analyzer instance
-let aiAnalyzer = null;
-let analyzerInitialized = false;
+// Offscreen document management - delegate to offscreen context where Web Workers are available
+let offscreenInitialized = false;
 let initializationPromise = null;
 
-// Initialize AI Analyzer
-async function initializeAnalyzer() {
-    if (analyzerInitialized && aiAnalyzer) {
-        return aiAnalyzer;
+// Create and initialize offscreen document with AI Worker
+async function ensureOffscreenDocument() {
+    if (offscreenInitialized) {
+        return;
     }
     
     if (initializationPromise) {
@@ -20,31 +18,250 @@ async function initializeAnalyzer() {
     
     initializationPromise = (async () => {
         try {
-            debugLog('[Background] Initializing AI Analyzer...');
+            debugLog('[Background] Creating offscreen document...');
+            
+            // Check if offscreen document already exists
+            const existingContexts = await chrome.runtime.getContexts({
+                contextTypes: ['OFFSCREEN_DOCUMENT']
+            });
+            
+            if (existingContexts.length === 0) {
+                // Create offscreen document
+                await chrome.offscreen.createDocument({
+                    url: 'offscreen.html',
+                    reasons: ['DOM_SCRAPING'],
+                    justification: 'AI Worker management for commission analysis'
+                });
+                debugLog('[Background] Offscreen document created');
+                
+                // Wait a bit for the offscreen document to fully load
+                await new Promise(resolve => setTimeout(resolve, 500));
+            } else {
+                debugLog('[Background] Offscreen document already exists');
+            }
+            
+            // Initialize AI Worker in offscreen document with retry mechanism
             const debugMode = await initDebugMode();
             const quantization = getCurrentQuantization();
             const { modelTemperature = 1.0 } = await chrome.storage.local.get(['modelTemperature']);
             
-            aiAnalyzer = new AIAnalyzer({
-                debugMode,
-                model: 'zohfur/distilbert-commissions-ONNX',
-                quantization,
-                temperature: modelTemperature
-            });
+            debugLog('[Background] Initializing AI Worker via offscreen...');
             
-            await aiAnalyzer.initialize();
+            let response = null;
+            let attempts = 0;
+            const maxAttempts = 3;
             
-            analyzerInitialized = true;
-            debugLog('[Background] AI Analyzer initialized successfully');
-            return aiAnalyzer;
+            while (!response && attempts < maxAttempts) {
+                attempts++;
+                try {
+                    const messageId = `init_worker_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                    
+                    debugLog(`[Background] Sending INIT_AI_WORKER message (attempt ${attempts}) with ID: ${messageId}`);
+                    
+                    response = await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => {
+                            reject(new Error('Timeout waiting for worker initialization response'));
+                        }, 60000); // 60 second timeout for initialization
+                        
+                        chrome.runtime.sendMessage({
+                            type: 'INIT_AI_WORKER',
+                            options: {
+                                debugMode,
+                                quantization,
+                                temperature: modelTemperature
+                            },
+                            messageId: messageId,
+                            timestamp: Date.now()
+                        }, (response) => {
+                            clearTimeout(timeout);
+                            
+                            if (chrome.runtime.lastError) {
+                                reject(new Error(`Chrome runtime error: ${chrome.runtime.lastError.message}`));
+                                return;
+                            }
+                            
+                            resolve(response);
+                        });
+                    });
+                    
+                    if (response && response.success) {
+                        break;
+                    } else if (response && response.ignored) {
+                        throw new Error('Initialization message was ignored - offscreen document may not be responding');
+                    } else if (response) {
+                        throw new Error(response.error || 'Unknown error from offscreen document');
+                    }
+                } catch (error) {
+                    console.warn(`[Background] Attempt ${attempts} failed:`, error);
+                    if (attempts < maxAttempts) {
+                        debugLog(`[Background] Retrying in 2 seconds...`);
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+            
+            if (!response || !response.success) {
+                throw new Error(response?.error || 'Failed to initialize AI Worker after multiple attempts');
+            }
+            
+            offscreenInitialized = true;
+            debugLog('[Background] AI Worker initialized successfully via offscreen');
         } catch (error) {
-            console.error('[Background] Failed to initialize AI Analyzer:', error);
+            console.error('[Background] Failed to initialize offscreen AI Worker:', error);
             initializationPromise = null;
+            offscreenInitialized = false;
             throw error;
         }
     })();
     
     return initializationPromise;
+}
+
+// Perform AI analysis via offscreen document (replaces direct analyzer.analyze() calls)
+async function performAIAnalysis(text, context = 'bio') {
+    try {
+        await ensureOffscreenDocument();
+        
+        debugLog('[Background] Sending analysis request to offscreen');
+        
+        let attempts = 0;
+        const maxAttempts = 2;
+        
+        while (attempts < maxAttempts) {
+            attempts++;
+            try {
+                // Create a unique message ID to avoid conflicts
+                const messageId = `ai_analysis_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                
+                debugLog(`[Background] Sending AI_ANALYZE (attempt ${attempts}) with ID: ${messageId}`);
+                
+                const response = await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Timeout waiting for offscreen response'));
+                    }, 30000); // 30 second timeout
+                    
+                    // Send message with response handler
+                    chrome.runtime.sendMessage({
+                        type: 'AI_ANALYZE',
+                        text: text,
+                        context: context,
+                        messageId: messageId,
+                        timestamp: Date.now()
+                    }, (response) => {
+                        clearTimeout(timeout);
+                        
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(`Chrome runtime error: ${chrome.runtime.lastError.message}`));
+                            return;
+                        }
+                        
+                        resolve(response);
+                    });
+                });
+
+                if (!response) {
+                    throw new Error('No response from offscreen document');
+                }
+                
+                if (response.ignored) {
+                    throw new Error('Message was ignored - offscreen document may not be responding');
+                }
+
+                if (!response.success) {
+                    throw new Error(response.error || 'Analysis failed in offscreen document');
+                }
+
+                debugLog('[Background] Analysis complete via offscreen');
+                return response.result;
+            } catch (error) {
+                console.warn(`[Background] Analysis attempt ${attempts} failed:`, error);
+                if (attempts < maxAttempts) {
+                    debugLog(`[Background] Retrying in 1 second...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+    } catch (error) {
+        console.error('[Background] AI analysis failed:', error);
+        throw error;
+    }
+}
+
+// Perform component analysis via offscreen document (replaces direct analyzer.analyzeComponents() calls)
+async function performComponentAnalysis(components) {
+    try {
+        await ensureOffscreenDocument();
+        
+        debugLog('[Background] Sending component analysis request to offscreen');
+        
+        let attempts = 0;
+        const maxAttempts = 2;
+        
+        while (attempts < maxAttempts) {
+            attempts++;
+            try {
+                // Create a unique message ID to avoid conflicts
+                const messageId = `ai_analysis_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                
+                debugLog(`[Background] Sending AI_ANALYZE_COMPONENTS (attempt ${attempts}) with ID: ${messageId}`);
+                
+                const response = await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Timeout waiting for offscreen response'));
+                    }, 30000); // 30 second timeout
+                    
+                    // Send message with response handler
+                    chrome.runtime.sendMessage({
+                        type: 'AI_ANALYZE_COMPONENTS',
+                        components: components,
+                        messageId: messageId,
+                        timestamp: Date.now()
+                    }, (response) => {
+                        clearTimeout(timeout);
+                        
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(`Chrome runtime error: ${chrome.runtime.lastError.message}`));
+                            return;
+                        }
+                        
+                        resolve(response);
+                    });
+                });
+
+                if (!response) {
+                    throw new Error('No response from offscreen document');
+                }
+                
+                if (response.ignored) {
+                    throw new Error('Message was ignored - offscreen document may not be responding');
+                }
+
+                if (!response.success) {
+                    throw new Error(response.error || 'Component analysis failed in offscreen document');
+                }
+
+                debugLog('[Background] Component analysis complete via offscreen');
+                return response.result;
+            } catch (error) {
+                console.warn(`[Background] Component analysis attempt ${attempts} failed:`, error);
+                if (attempts < maxAttempts) {
+                    debugLog(`[Background] Retrying in 1 second...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+    } catch (error) {
+        console.error('[Background] Component analysis failed:', error);
+        throw error;
+    }
 }
 
 let isDebugMode = false;
@@ -526,13 +743,11 @@ async function handleAnalyzeRequest(request, sender, sendResponse) {
         result = patternAnalyze(request.text);
       }
     } else {
-      // AI mode - use the full AI analyzer
-      const analyzer = await initializeAnalyzer();
-      
+      // AI mode - use the AI worker to avoid service worker dynamic import restrictions
       if (request.type === 'analyze_components') {
-        result = await analyzer.analyzeComponents(request.components);
+        result = await performComponentAnalysis(request.components);
       } else {
-        result = await analyzer.analyze(request.text, request.context || 'bio');
+        result = await performAIAnalysis(request.text, request.context || 'bio');
       }
     }
     
@@ -1293,10 +1508,7 @@ async function clearResults(sendResponse) {
 
 async function handleTestRequest(sendResponse) {
   try {
-    // Initialize analyzer if needed
-    const analyzer = await initializeAnalyzer();
-    
-    // Run test cases
+    // Run test cases using AI worker
     const testCases = [
       { text: "Commissions are OPEN! DM me for details", expected: true },
       { text: "Sorry, commissions are closed right now", expected: false },
@@ -1307,7 +1519,7 @@ async function handleTestRequest(sendResponse) {
     
     const results = [];
     for (const testCase of testCases) {
-      const result = await analyzer.analyze(testCase.text, 'test');
+      const result = await performAIAnalysis(testCase.text, 'test');
       results.push({
         text: testCase.text,
         expected: testCase.expected,
@@ -1340,10 +1552,16 @@ async function handleQuantizationChange(quantizationType, sendResponse) {
     // Update the current quantization in model manager
     setCurrentQuantization(quantizationType);
     
-    // Reset analyzer to force re-initialization with new model
-    analyzerInitialized = false;
+    // Reset offscreen document to force re-initialization with new model
+    offscreenInitialized = false;
     initializationPromise = null;
-    aiAnalyzer = null;
+    
+    // Terminate AI worker in offscreen document
+    try {
+      await chrome.runtime.sendMessage({ type: 'TERMINATE_AI_WORKER' });
+    } catch {
+      console.log('[Background] Offscreen document may not be available for termination');
+    }
     
     // Store the selected quantization in storage
     await chrome.storage.local.set({ selectedQuantization: quantizationType });
@@ -1474,10 +1692,16 @@ async function handleTemperatureUpdate(temperature, sendResponse) {
     // Store the new temperature
     await chrome.storage.local.set({ modelTemperature: temperature });
     
-    // Reset analyzer to force re-initialization with new temperature
-    analyzerInitialized = false;
+    // Reset offscreen document to force re-initialization with new temperature
+    offscreenInitialized = false;
     initializationPromise = null;
-    aiAnalyzer = null;
+    
+    // Terminate AI worker in offscreen document
+    try {
+      await chrome.runtime.sendMessage({ type: 'TERMINATE_AI_WORKER' });
+    } catch {
+      console.log('[Background] Offscreen document may not be available for termination');
+    }
     
     sendResponse({ success: true });
   } catch (error) {

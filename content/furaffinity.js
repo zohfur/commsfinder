@@ -962,18 +962,30 @@ async function scanFurAffinity(existingProgress = null) {
             const artistData = await scrapeArtistProfile(artist);
             
             if (artistData) {
-                // Send to AI analyzer
-                const analysisRequest = {
-                    type: 'analyze_components',
-                    components: formatDataForAnalysis(artistData),
-                    context: 'furaffinity_profile',
-                    metadata: artistData
-                };
-                
-                console.log('[CommsFinder] Sending analysis request:', analysisRequest);
+                try {
+                    // Send to AI analyzer
+                    const analysisRequest = {
+                        type: 'analyze_components',
+                        components: formatDataForAnalysis(artistData),
+                        context: 'furaffinity_profile',
+                        metadata: artistData
+                    };
+                    
+                    console.log('[CommsFinder] Sending analysis request:', analysisRequest);
 
-                chrome.runtime.sendMessage(analysisRequest, (response) => {
+                    // Convert to Promise-based approach
+                    const response = await new Promise((resolve, reject) => {
+                        chrome.runtime.sendMessage(analysisRequest, (response) => {
+                            if (chrome.runtime.lastError) {
+                                reject(new Error(chrome.runtime.lastError.message));
+                                return;
+                            }
+                            resolve(response);
+                        });
+                    });
+
                     console.log('[CommsFinder] Received analysis response:', response);
+                    
                     if (response && response.success) {
                         const result = {
                             ...artistData,
@@ -985,6 +997,9 @@ async function scanFurAffinity(existingProgress = null) {
                         
                         console.log('[CommsFinder] Final artist result:', result);
                         
+                        // Add to results array for local tracking
+                        results.push(result);
+                        
                         // Report found artist
                         chrome.runtime.sendMessage({
                             type: 'ARTIST_FOUND',
@@ -993,7 +1008,9 @@ async function scanFurAffinity(existingProgress = null) {
                     } else {
                         console.error('[CommsFinder] Analysis failed:', response?.error || 'Unknown error');
                     }
-                });
+                } catch (error) {
+                    console.error('[CommsFinder] Analysis request failed:', error);
+                }
             }
             
             await rateLimitedDelay();

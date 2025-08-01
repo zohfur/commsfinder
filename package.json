@@ -22,7 +22,7 @@
   "author": "Zohfur",
   "license": "AGPL-3.0",
   "dependencies": {
-    "@xenova/transformers": "^2.15.0",
+    "bert-tokenizer": "^1.1.8",
     "chart": "^0.1.2",
     "onnxruntime-web": "^1.22.0",
     "performance-now": "^2.1.0",

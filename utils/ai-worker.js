@@ -30,11 +30,8 @@ self.addEventListener('message', async (event) => {
                 };
                 analyzer = new AIAnalyzer(analyzerOptions);
                 
-                // Pass a progress callback to the initialize method.
-                // This will send model loading progress back to the main thread.
-                await analyzer.initialize((progress) => {
-                    self.postMessage({ type: 'progress', data: progress });
-                });
+                // Initialize the analyzer
+                await analyzer.initialize();
                 
                 self.postMessage({ type: 'initialized' });
                 console.log('[AI Worker] Analyzer initialized successfully.');
@@ -59,6 +56,42 @@ self.addEventListener('message', async (event) => {
                 break;
             }
 
+            case 'analyze_components': {
+                // Perform component analysis.
+                if (!analyzer) {
+                    throw new Error('Analyzer not initialized. Send "init" message first.');
+                }
+                if (!event.data.components) {
+                    throw new Error('No components provided for analysis.');
+                }
+                
+                console.log('[AI Worker] Starting component analysis...');
+                const result = await analyzer.analyzeComponents(event.data.components);
+                console.log('[AI Worker] Component analysis complete.');
+                
+                // Send the result back to the main thread.
+                self.postMessage({ type: 'result', data: result });
+                break;
+            }
+
+            case 'batch_analyze': {
+                // Perform batch text analysis.
+                if (!analyzer) {
+                    throw new Error('Analyzer not initialized. Send "init" message first.');
+                }
+                if (!event.data.texts || !Array.isArray(event.data.texts)) {
+                    throw new Error('No texts array provided for batch analysis.');
+                }
+                
+                console.log(`[AI Worker] Starting batch analysis of ${event.data.texts.length} texts...`);
+                const results = await analyzer.batchAnalyze(event.data.texts);
+                console.log('[AI Worker] Batch analysis complete.');
+                
+                // Send the result back to the main thread.
+                self.postMessage({ type: 'result', data: results });
+                break;
+            }
+
             case 'change_quantization':
                 // Change the quantization used by the analyzer
                 if (!analyzer) {
@@ -69,9 +102,7 @@ self.addEventListener('message', async (event) => {
                 analyzer.setQuantization(options.quantization);
                 
                 // Re-initialize with the new quantization
-                await analyzer.initialize((progress) => {
-                    self.postMessage({ type: 'progress', data: progress });
-                });
+                await analyzer.initialize();
                 
                 self.postMessage({ type: 'quantization_changed', quantization: options.quantization });
                 console.log('[AI Worker] Quantization changed successfully to:', options.quantization);
