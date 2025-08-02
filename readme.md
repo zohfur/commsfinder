@@ -1,18 +1,23 @@
-# Commsfinder Chrome Extension
 
-> ![Commsfinder](logos/fa.webp) **Find artists with open commissions across social media platforms**
+# 🔍 Commsfinder Extension
 
-Commsfinder is a Chrome browser extension that automatically scans your followed artists on FurAffinity, Bluesky, and Twitter/X to identify who currently has open commission slots. Using AI-powered text analysis and pattern recognition, it saves you time by eliminating the need to manually browse through hundreds (or thousands) of profiles.
+![Commsfinder](logos/commsfinder_outline.png) **Find artists to commission across multiple platforms**
+
+Commsfinder is a cross-platform browser extension that automatically scans your followed artists on FurAffinity, Bluesky, Twitter/X, and more, to identify artists that are currently open for commissions or paid work. Using AI-powered text analysis and pattern recognition, it saves you time by eliminating the need to manually browse through hundreds (or thousands) of profiles.
+
+Commsfinder uses a custom fine-tuned classification model based on DistilBERT that runs entirely in your web browser off pure JavaScript; no programs, APIs, servers, or paid software required. It supports both CPU and GPU inference through Onnxruntime-web (ORT).
 
 ## ✨ Features
 
-- **🔍 Multi-Platform Scanning**: Supports FurAffinity, Bluesky, and Twitter/X
-- **🤖 AI & No-AI Modes**: Choose between a custom-built ethical* classification model or a simple pattern recognition algorithm
-- **📊 Confidence Scoring**: Each result includes a confidence percentage
-- **🎯 Pattern Recognition**: Detects common obfuscation techniques (e.g., "0pen c0mms")
-- **💾 Result Caching**: Saves previous scans to avoid unnecessary re-scanning
-- **🔒 Privacy-First**: No data leaves your device. No telemetry, tracking, profiling, or spam
-- **📋 Export Results**: Share your commission lists with friends
+- **Multi-Platform Scanning:** Support FurAffinity and Bluesky with more to come.
+
+- **AI & No-AI Modes**: Choose between Commsfinder's classification model or simple pattern detection using regex and keywords.
+
+- **Sorted by confidence**: Each classification outputs a confidence score which is totalled to a final result per profile; the resulting list is sorted by confidence, showing the most likely available artists at the top.
+
+- **Result caching**: Saves previous scans and partial scan progress to a local cache to avoid unnecessary waiting and page loads.
+
+- **Damn good privacy**: No data leaves your device. No telemetry, servers, or spam.
 
 ## 📖 How to Use
 
@@ -25,66 +30,39 @@ Commsfinder is a Chrome browser extension that automatically scans your followed
 
 ### Viewing Results
 
-- **Artist cards** show avatar, name, platform, and confidence score
+- **Artist cards** show the avatar, name, platform, and confidence score
 - **Click any result** to open the artist's profile in a new tab
-- **Sort results** by confidence level or platform
-- **Filter and trim** your results by blacklisting or favoriting certain accounts
-- **Share your list** to show to friends
+- **Filter results** by confidence level or platform
+- **Personalize** your results by blacklisting or favoriting certain accounts
 
-### Understanding Confidence Scores
+### Understanding Artist Scores
 
-- **🟢 70-100%**: High confidence - Strong indicators found
-- **🟡 50-69%**: Medium confidence - Likely indicators found  
-- **🔴 30-49%**: Low confidence - Weak or ambiguous signals
+- **🟢 70-100%**: High confidence artist is open
+- **🟡 50-69%**: Some results classified as open
+- **🔴 30-49%**: Likely not accepting commissions
 
-## 🎯 What It Detects
+**Why is a certain profile wrongly detected as closed?**
+> If an artist does not specifically mention they are open or closed, we have no way of detecting that aside from asking them directly.
+> In the future, support will be added for the community to manually submit corrections or share openings.
 
-The extension looks for commission status indicators in:
+## Detection
 
-- **Artist bios/profiles**
-- **Display names** (e.g., "ArtistName - COMMS OPEN")
-- **Recent posts/submissions**
-- **Pinned posts** (where available)
+Commsfinder tries to pull from as many sources as possible while being mindful of the sites we're utilizing.
 
-### Common Patterns Detected
+### Example: FurAffinity
 
-✅ **Open Indicators**:
+We search the user's Favorites and Watchlist pages to find artists.
 
-- "commissions open", "comms open"
-- "accepting commissions", "taking commissions"
-- "slots available", "3/5 slots open"
-- "DM for commissions", "commission me"
-- Obfuscated text: "0pen c0mms", "c*mms open"
+Each artist is scraped for the following data points:
 
-❌ **Closed Indicators**:
+1. **Profile Bio** and description
+2. **Recent gallery items** (and their names, description, and tags)
+3. **Pinned/most recent journal** (we also weigh this by how recent it is)
+4. **Profile commissions status** (Commissions: Yes/No)
 
-- "commissions closed", "comms closed"
-- "queue full", "not taking commissions"
-- "all slots taken", "waitlist closed"
+Each component is classified and the final score is calculated by weighing all the available data.
 
-❓**Ambiguous/Unclear Indicators**:
-
-- "DM me about comms"
-- "comms: [carrd.co link]"
-- "artist name - working on comms"
-
-## ⚙️ Settings
-
-Access settings by clicking the ⚙️ icon in the popup:
-
-- **AI Analysis**: Enable/disable local AI processing
-- **Confidence Threshold**: Minimum confidence to show results (10-100%)
-- **Platform Selection**: Choose which platforms to scan
-- **Data Management**: Clear cached results and settings
-
-## 🔒 Privacy & Security
-
-- **No data leaves your browser**: All processing is done locally
-- **No API keys or developer accounts required**: Uses web scraping and service workers instead of paid APIs
-- **Transparent operation**: Open source code and publicly available LLM for full transparency
-- **No tracking**: The extension doesn't collect or transmit user data
-
-### Supported Platforms
+## 🎨 Supported Platforms
 
 | Platform | Status | Detection Method |
 |----------|--------|------------------|
@@ -96,28 +74,51 @@ Access settings by clicking the ⚙️ icon in the popup:
 > This makes the only possible scanning method to be web scraping using an account, which is likely going to be immediately banned.
 > Later down the road, if we reach enough users, I could set up a Patreon / premium subscription to fund Twitter/X support.
 
-## 📋 Roadmap
+## 🔒 Privacy and Security
 
-Rough Roadmap, subject to change:
-[ ] v1.1 - Polish Update: Improve UI & scan experience, bugfixing and user feedback
-[ ] v1.2 - Quality of life: Scheduled scans, statistics, CSV/JSON export support
-[ ] v1.3 - No-AI Mode: Regex and keyword-based detection with manual dictionary support
-[ ] v1.4 - Community Verification: Users can report scan inaccuracies and submit manual artist comm status
-[ ] v1.5 - Platform Update: Add support for e621, ych.commishes, Weasyl, Artistree, Artconomy, etc
-[ ] v1.6 - Tag searching: Search for a specific type of art or commission
-[ ] v1.7 - Android app: Android device support for mobile use
-[ ] v1.8 - iOS app: Apple device support... maybe
+**No data leaves your browser:** All processing and inference is done locally
 
+**No API keys or developer accounts required:** Uses web scraping and JS service workers instead of paid APIs
 
-### 🔎 Detection Strategy
+**Transparency**: Open source code and publicly available DistilBERT model
 
-Open/closed detection tries to pull as many different sources of info as possible. Very much a work in progress.
+**No telemetry or tracking**: No user data collected or transmitted
 
-AI mode: Classifies each individual section with a local classification model. Component classifications are used alongside pattern detection to determine a confidence score.
+## 🗺️ Roadmap
 
-No-AI (Regex) mode: Scan profiles using scraping and regex, manual dictionaries help improve detection. Open and closed signals across profiles contribute to a final score.
+*Rough roadmap, very subject to change*
 
-**Example:**
-Artist's Profile Name: **50%**
-Profile Bio: **30%**
-Pinned and recent posts: **20%** *(if applicable)*
+### v1.1 - Polish Update
+
+- Improve UI and scan experience
+- Bugfixing
+- Implement user requests and feedback
+
+### v1.2 - Quality of Life
+
+- Scan statistics
+- CSV/JSON export support
+- Improve No-AI mode accuracy
+
+### v1.3 - Model Update
+
+- New revision of classification Model
+- Higher accuracy and faster inference
+- Better WebGPU support
+
+### v1.4 - Community Update
+
+- Users can report scan inaccuracies
+- Manually submit artist status
+- Buyer Beware / Artist Beware integration(?)
+
+### v1.5 - Platform Update
+
+- Add support for e621, ych.commishes, Weasyl, Artistree, Artconomy
+- Re-evaluate Twitter/X support (if we reach enough users)
+
+### v1.6+ - Tagging and Mobile Development
+
+- Tag searching: Search for artists with specific keyword or tag
+- Android app for mobile usage
+- iOS app.. maybe.
