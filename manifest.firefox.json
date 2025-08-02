@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Commsfinder",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Find artists with open commissions across multiple platforms",
   "browser_specific_settings": {
     "gecko": {

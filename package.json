@@ -1,6 +1,6 @@
 {
   "name": "commsfinder",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Find artists with open commissions across social media platforms",
   "main": "background.js",
   "scripts": {
