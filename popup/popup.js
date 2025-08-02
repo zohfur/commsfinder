@@ -30,6 +30,7 @@ class CommisionsfinderPopup {
     this.loadResults();
     this.checkModelStatus();
     this.checkBenchmarkAvailability();
+    this.loadFavoritesAndBlacklist();
   }
   
   initializeElements() {
@@ -84,10 +85,18 @@ class CommisionsfinderPopup {
 
     // CommsClassifier promo, roadmap, and feedback
     this.commsClassifierPromo = document.getElementById('commsClassifierPromo');
+    this.promoCloseBtn = document.getElementById('promoCloseBtn');
+    this.promoHideOptions = document.getElementById('promoHideOptions');
+    this.promoHideForever = document.getElementById('promoHideForever');
+    this.promoHideFor3Days = document.getElementById('promoHideFor3Days');
     this.roadmapSection = document.querySelector('.roadmap-section');
     this.roadmapToggleBtn = document.getElementById('roadmapToggleBtn');
     this.roadmapContent = document.getElementById('roadmapContent');
     this.feedbackSection = document.querySelector('.feedback-section');
+    this.feedbackCloseBtn = document.getElementById('feedbackCloseBtn');
+    this.feedbackHideOptions = document.getElementById('feedbackHideOptions');
+    this.feedbackHideForever = document.getElementById('feedbackHideForever');
+    this.feedbackHideFor3Days = document.getElementById('feedbackHideFor3Days');
 
     // Benchmark elements
     this.benchmarkGroup = document.getElementById('benchmarkGroup');
@@ -189,6 +198,28 @@ class CommisionsfinderPopup {
     // Roadmap toggle
     this.roadmapToggleBtn.addEventListener('click', () => this.toggleRoadmap());
 
+    // Promo section close and hide buttons
+    if (this.promoCloseBtn) {
+      this.promoCloseBtn.addEventListener('click', () => this.showPromoHideOptions());
+    }
+    if (this.promoHideForever) {
+      this.promoHideForever.addEventListener('click', () => this.hidePromoForever());
+    }
+    if (this.promoHideFor3Days) {
+      this.promoHideFor3Days.addEventListener('click', () => this.hidePromoFor3Days());
+    }
+
+    // Feedback section close and hide buttons
+    if (this.feedbackCloseBtn) {
+      this.feedbackCloseBtn.addEventListener('click', () => this.showFeedbackHideOptions());
+    }
+    if (this.feedbackHideForever) {
+      this.feedbackHideForever.addEventListener('click', () => this.hideFeedbackForever());
+    }
+    if (this.feedbackHideFor3Days) {
+      this.feedbackHideFor3Days.addEventListener('click', () => this.hideFeedbackFor3Days());
+    }
+
     // Benchmark button
     if (this.runBenchmarkBtn) {
       this.runBenchmarkBtn.addEventListener('click', () => this.startBenchmark());
@@ -198,7 +229,8 @@ class CommisionsfinderPopup {
   async loadSettings() {
     try {
       const result = await chrome.storage.local.get([
-        'aiEnabled', 'selectedQuantization', 'platforms', 'modelTemperature', 'debugMode', 'zenMode', 'roadmapMinimized'
+        'aiEnabled', 'selectedQuantization', 'platforms', 'modelTemperature', 'debugMode', 'zenMode', 'roadmapMinimized',
+        'promoHiddenForever', 'promoHiddenUntil', 'feedbackHiddenForever', 'feedbackHiddenUntil'
       ]);
       
       if (result.aiEnabled !== undefined) {
@@ -246,6 +278,21 @@ class CommisionsfinderPopup {
         const toggleIcon = this.roadmapToggleBtn.querySelector('.toggle-icon');
         toggleIcon.textContent = '❯';
         this.roadmapToggleBtn.title = 'Expand Roadmap';
+      }
+
+      // Check promo hiding preferences
+      const now = Date.now();
+      if (result.promoHiddenForever || (result.promoHiddenUntil && now < result.promoHiddenUntil)) {
+        if (this.commsClassifierPromo) {
+          this.commsClassifierPromo.style.display = 'none';
+        }
+      }
+
+      // Check feedback hiding preferences
+      if (result.feedbackHiddenForever || (result.feedbackHiddenUntil && now < result.feedbackHiddenUntil)) {
+        if (this.feedbackSection) {
+          this.feedbackSection.style.display = 'none';
+        }
       }
 
       // Show/hide model selection based on AI enabled status
@@ -1128,6 +1175,14 @@ class CommisionsfinderPopup {
       </div>
     `;
     
+    // Apply favorited/blacklisted CSS classes to the element
+    if (isFavorited) {
+      element.classList.add('favorited');
+    }
+    if (isBlacklisted) {
+      element.classList.add('blacklisted');
+    }
+    
     // Add error handler for avatar image (CSP-compliant)
     const avatarImg = element.querySelector('.result-avatar');
     avatarImg.addEventListener('error', () => {
@@ -1187,12 +1242,25 @@ class CommisionsfinderPopup {
       this.toggleFavorite(artistId);
       favoriteBtn.classList.toggle('active');
       favoriteBtn.textContent = favoriteBtn.classList.contains('active') ? '⭐' : '☆';
+      // Toggle the CSS class on the result item
+      element.classList.toggle('favorited');
     });
     
     blacklistBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.toggleBlacklist(artistId);
       blacklistBtn.classList.toggle('active');
+      // Toggle the CSS class on the result item
+      element.classList.toggle('blacklisted');
+      // Remove favorited class if blacklisting
+      if (blacklistBtn.classList.contains('active')) {
+        element.classList.remove('favorited');
+        const favBtn = element.querySelector('.favorite-btn');
+        if (favBtn) {
+          favBtn.classList.remove('active');
+          favBtn.textContent = '☆';
+        }
+      }
     });
     
     return element;
@@ -2215,6 +2283,74 @@ getSpeedClass(samplesPerSecond) {
     // Hide/show feedback section
     if (this.feedbackSection) {
       this.feedbackSection.style.display = enabled ? 'none' : '';
+    }
+  }
+
+  // Promo section hide methods
+  showPromoHideOptions() {
+    if (this.promoHideOptions) {
+      this.promoHideOptions.style.display = 'block';
+    }
+  }
+
+  async hidePromoForever() {
+    try {
+      await chrome.storage.local.set({ promoHiddenForever: true });
+      if (this.commsClassifierPromo) {
+        this.commsClassifierPromo.style.display = 'none';
+      }
+      this.showSuccess('Promo section hidden permanently');
+    } catch (error) {
+      console.error('Error hiding promo forever:', error);
+      this.showError('Failed to hide promo section');
+    }
+  }
+
+  async hidePromoFor3Days() {
+    try {
+      const hiddenUntil = Date.now() + (3 * 24 * 60 * 60 * 1000); // 3 days from now
+      await chrome.storage.local.set({ promoHiddenUntil: hiddenUntil });
+      if (this.commsClassifierPromo) {
+        this.commsClassifierPromo.style.display = 'none';
+      }
+      this.showSuccess('Promo section hidden for 3 days');
+    } catch (error) {
+      console.error('Error hiding promo for 3 days:', error);
+      this.showError('Failed to hide promo section');
+    }
+  }
+
+  // Feedback section hide methods
+  showFeedbackHideOptions() {
+    if (this.feedbackHideOptions) {
+      this.feedbackHideOptions.style.display = 'block';
+    }
+  }
+
+  async hideFeedbackForever() {
+    try {
+      await chrome.storage.local.set({ feedbackHiddenForever: true });
+      if (this.feedbackSection) {
+        this.feedbackSection.style.display = 'none';
+      }
+      this.showSuccess('Feedback section hidden permanently');
+    } catch (error) {
+      console.error('Error hiding feedback forever:', error);
+      this.showError('Failed to hide feedback section');
+    }
+  }
+
+  async hideFeedbackFor3Days() {
+    try {
+      const hiddenUntil = Date.now() + (3 * 24 * 60 * 60 * 1000); // 3 days from now
+      await chrome.storage.local.set({ feedbackHiddenUntil: hiddenUntil });
+      if (this.feedbackSection) {
+        this.feedbackSection.style.display = 'none';
+      }
+      this.showSuccess('Feedback section hidden for 3 days');
+    } catch (error) {
+      console.error('Error hiding feedback for 3 days:', error);
+      this.showError('Failed to hide feedback section');
     }
   }
 }
