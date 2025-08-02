@@ -24,7 +24,7 @@ module.exports = {
   output: {
     filename: '[name].js',
     path: path.resolve(__dirname, 'dist'),
-    publicPath: '/', // Changed from /dist/ to / for correct dynamic imports
+    publicPath: '/',
   },
   optimization: {
     minimize: false,
@@ -54,6 +54,10 @@ module.exports = {
           globOptions: {
             ignore: ['**/ort.all.js', '**/ort.all.js.map','**/ort.all.mjs','**/ort.all.mjs.map']
           }
+         },
+         {
+          from: 'ort-wasm-simd.wasm',
+          to: 'onnxruntime-web/ort-wasm-simd.wasm'
          },
         {
           from: 'benchmark.js',

@@ -198,13 +198,16 @@ class ProgressTracker {
             
             updateProgressOverlay(this.phase, data);
             
-            chrome.runtime.sendMessage({
-                type: 'SCAN_PROGRESS',
-                platform: 'bluesky',
-                data: data
-            }).catch(error => {
-                console.warn('[Bluesky] Failed to send progress update:', error);
-            });
+            // Only attempt to send message if extension context is valid
+            if (isExtensionContextValid()) {
+                chrome.runtime.sendMessage({
+                    type: 'SCAN_PROGRESS',
+                    platform: 'bluesky',
+                    data: data
+                }).catch(error => {
+                    console.warn('[Bluesky] Failed to send progress update:', error);
+                });
+            }
         } catch (error) {
             console.error('[Bluesky] Error in sendUpdate:', error);
         }
@@ -214,6 +217,14 @@ class ProgressTracker {
 const progress = new ProgressTracker();
 
 // Helper functions
+function isExtensionContextValid() {
+    try {
+        return !!(chrome && chrome.runtime && chrome.runtime.id);
+    } catch (error) {
+        return false;
+    }
+}
+
 async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -604,13 +615,15 @@ async function scanBluesky(existingProgress = null) {
     if (!authStatus.isAuthenticated) {
         console.warn('[Bluesky] User not authenticated to Bluesky');
         updateProgressOverlay('error', { error: 'Not logged in to Bluesky or unable to access profile' });
-        chrome.runtime.sendMessage({
-            type: 'SCAN_ERROR',
-            platform: 'bluesky',
-            error: 'Not logged in to Bluesky or unable to access profile'
-        }).catch(error => {
-            console.warn('[Bluesky] Failed to send scan error message:', error);
-        });
+        if (isExtensionContextValid()) {
+            chrome.runtime.sendMessage({
+                type: 'SCAN_ERROR',
+                platform: 'bluesky',
+                error: 'Not logged in to Bluesky or unable to access profile'
+            }).catch(error => {
+                console.warn('[Bluesky] Failed to send scan error message:', error);
+            });
+        }
         return;
     }
     
@@ -671,30 +684,25 @@ async function scanBluesky(existingProgress = null) {
                 
                 console.log('[Bluesky] Sending analysis request:', analysisRequest);
 
-                chrome.runtime.sendMessage(analysisRequest, (response) => {
-                    console.log('[Bluesky] Received analysis response:', response);
-                    if (response && response.success) {
-                        const result = {
-                            ...artistData,
-                            analysis: response.result,
-                            confidence: response.result.confidence,
-                            commissionStatus: response.result.commissionStatus,
-                            triggers: response.result.triggers
-                        };
-                        
+                try {
+                    const result = await sendAnalysisRequestWithRetry(analysisRequest, artistData);
+                    if (result) {
                         console.log('[Bluesky] Final artist result:', result);
                         
                         // Report found artist
-                        chrome.runtime.sendMessage({
-                            type: 'ARTIST_FOUND',
-                            data: result
-                        }).catch(error => {
-                            console.warn('[Bluesky] Failed to send artist found message:', error);
-                        });
-                    } else {
-                        console.error('[Bluesky] Analysis failed:', response?.error || 'Unknown error');
+                        if (isExtensionContextValid()) {
+                            chrome.runtime.sendMessage({
+                                type: 'ARTIST_FOUND',
+                                data: result
+                            }).catch(error => {
+                                console.warn('[Bluesky] Failed to send artist found message:', error);
+                            });
+                        }
                     }
-                });
+                } catch (error) {
+                    console.error('[Bluesky] Analysis failed after retries:', error);
+                    // Continue with next artist instead of failing completely
+                }
             }
             
             await rateLimitedDelay();
@@ -707,24 +715,28 @@ async function scanBluesky(existingProgress = null) {
             total: following.length
         });
         
-        chrome.runtime.sendMessage({
-            type: 'SCAN_COMPLETE',
-            platform: 'bluesky',
-            results: [] // Send empty results array to match expected signature
-        }).catch(error => {
-            console.warn('[Bluesky] Failed to send scan complete message:', error);
-        });
+        if (isExtensionContextValid()) {
+            chrome.runtime.sendMessage({
+                type: 'SCAN_COMPLETE',
+                platform: 'bluesky',
+                results: [] // Send empty results array to match expected signature
+            }).catch(error => {
+                console.warn('[Bluesky] Failed to send scan complete message:', error);
+            });
+        }
         
     } catch (error) {
         console.error('[Bluesky] Scan error:', error);
         updateProgressOverlay('error', { error: error.message });
-        chrome.runtime.sendMessage({
-            type: 'SCAN_ERROR',
-            platform: 'bluesky',
-            error: error.message
-        }).catch(error => {
-            console.warn('[Bluesky] Failed to send scan error message:', error);
-        });
+        if (isExtensionContextValid()) {
+            chrome.runtime.sendMessage({
+                type: 'SCAN_ERROR',
+                platform: 'bluesky',
+                error: error.message
+            }).catch(error => {
+                console.warn('[Bluesky] Failed to send scan error message:', error);
+            });
+        }
     }
 }
 
@@ -744,6 +756,271 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     return true;
 });
+
+// Pattern matching fallback when background script is unavailable
+const OPEN_PATTERNS = [
+    /\bcomm?(?:ission)?s?\s*(?:are\s+)?open\b/i,
+    /\bc0mm?(?:ission)?s?\s*(?:are\s+)?open\b/i,
+    /\bc0mm?s?\s*0pen\b/i,
+    /\bc\*mm?s?\s*open\b/i,
+    /\btaking\s+comm?(?:ission)?s?\b/i,
+    /\bcomm?(?:ission)?s?\s+slots?\s+(?:open|available)\b/i,
+    /\bopen\s+for\s+comm?(?:ission)?s?\b/i,
+    /\bopen\s+comm?(?:ission)?s?\b/i,
+    /\bcommissions?\s*:\s*open\b/i,
+    /\bcommisisons\s+open\b/i,
+    /\bСommission\s*-\s*open\b/i,
+    /\baccept(?:ing)?\s+comm?(?:ission)?s?\b/i,
+    /\bslots?\s+available\b/i,
+    /\bdm\s+(?:me\s+)?for\s+comm?(?:ission)?s?\b/i,
+    /\bqueue\s+(?:is\s+)?open\b/i
+];
+
+const CLOSED_PATTERNS = [
+    /\bcomm?(?:ission)?s?\s*(?:are\s+)?closed?\b/i,
+    /\bc\*mm?s?\s*closed?\b/i,
+    /\bcom?s?\s*closed?\b/i,
+    /\bnot\s+taking\s+comm?(?:ission)?s?\b/i,
+    /\bno\s+comm?(?:ission)?s?\b/i,
+    /\bclosed\s+(?:for\s+)?comm?(?:ission)?s?\b/i,
+    /\bhiatus\b/i,
+    /\bcomm?(?:ission)?s?\s*(?:are\s+)?(?:full|unavailable)\b/i,
+    /\bcommissions?\s*:\s*closed\b/i,
+    /\bqueue\s*(?:is\s+)?(?:full|closed)\b/i,
+    /\bnot\s+accept(?:ing)?\s+comm?(?:ission)?s?\b/i,
+    /\bfully\s+booked\b/i,
+    /\bwaitlist\s+(?:is\s+)?closed\b/i
+];
+
+function patternAnalyzeFallback(text) {
+    if (!text) {
+        return {
+            commissionStatus: 'unclear',
+            confidence: 0.3,
+            method: 'pattern-fallback',
+            triggers: []
+        };
+    }
+
+    const openMatches = [];
+    const closedMatches = [];
+    
+    // Check for open patterns
+    for (const pattern of OPEN_PATTERNS) {
+        const match = text.match(pattern);
+        if (match) {
+            openMatches.push(match[0]);
+        }
+    }
+    
+    // Check for closed patterns
+    for (const pattern of CLOSED_PATTERNS) {
+        const match = text.match(pattern);
+        if (match) {
+            closedMatches.push(match[0]);
+        }
+    }
+    
+    let commissionStatus = 'unclear';
+    let confidence = 0.3;
+    let triggers = [];
+    
+    if (closedMatches.length > 0 && openMatches.length === 0) {
+        commissionStatus = 'closed';
+        confidence = Math.min(0.8 + (closedMatches.length * 0.05), 0.95);
+        triggers = closedMatches;
+    } else if (openMatches.length > 0 && closedMatches.length === 0) {
+        commissionStatus = 'open';
+        confidence = Math.min(0.8 + (openMatches.length * 0.05), 0.95);
+        triggers = openMatches;
+    } else if (openMatches.length > 0 && closedMatches.length > 0) {
+        // Conflicting signals - use the one with more matches
+        if (closedMatches.length > openMatches.length) {
+            commissionStatus = 'closed';
+            confidence = 0.6;
+            triggers = closedMatches;
+        } else {
+            commissionStatus = 'open';
+            confidence = 0.6;
+            triggers = openMatches;
+        }
+    }
+    
+    return {
+        commissionStatus,
+        confidence,
+        method: 'pattern-fallback',
+        triggers: [...new Set(triggers)] // Unique triggers
+    };
+}
+
+function patternAnalyzeComponentsFallback(components) {
+    const results = {
+        displayName: null,
+        bio: null,
+        journal: null,
+        gallery: null,
+        posts: null
+    };
+    
+    let highestConfidence = 0;
+    let overallStatus = 'unclear';
+    let allTriggers = [];
+    
+    // Analyze display name with high weight
+    if (components.displayName) {
+        const displayNameResult = patternAnalyzeFallback(components.displayName);
+        results.displayName = displayNameResult;
+        
+        if (displayNameResult.confidence > 0.7) {
+            // Display name is very reliable
+            highestConfidence = displayNameResult.confidence;
+            overallStatus = displayNameResult.commissionStatus;
+            allTriggers.push(...displayNameResult.triggers);
+        }
+    }
+    
+    // Analyze bio with high weight
+    if (components.bio) {
+        const bioResult = patternAnalyzeFallback(components.bio);
+        results.bio = bioResult;
+        
+        if (bioResult.confidence > highestConfidence) {
+            highestConfidence = bioResult.confidence;
+            overallStatus = bioResult.commissionStatus;
+        }
+        allTriggers.push(...bioResult.triggers);
+    }
+    
+    // Analyze posts if present
+    if (components.posts && Array.isArray(components.posts)) {
+        const postResults = [];
+        for (const post of components.posts) {
+            if (post.text) {
+                const postResult = patternAnalyzeFallback(post.text);
+                postResults.push({
+                    ...postResult,
+                    url: post.url,
+                    date: post.date,
+                    isPinned: post.isPinned
+                });
+                allTriggers.push(...postResult.triggers);
+            }
+        }
+        
+        if (postResults.length > 0) {
+            // Prioritize pinned posts
+            const pinnedPosts = postResults.filter(p => p.isPinned);
+            const bestPostResult = pinnedPosts.length > 0 ? 
+                pinnedPosts.reduce((best, current) => current.confidence > best.confidence ? current : best) :
+                postResults.reduce((best, current) => current.confidence > best.confidence ? current : best);
+            
+            results.posts = {
+                items: postResults,
+                confidence: bestPostResult.confidence,
+                commissionStatus: bestPostResult.commissionStatus
+            };
+            
+            if (bestPostResult.isPinned && bestPostResult.confidence > 0.7) {
+                highestConfidence = bestPostResult.confidence;
+                overallStatus = bestPostResult.commissionStatus;
+            }
+        }
+    }
+    
+    // Return final result
+    return {
+        commissionStatus: overallStatus,
+        confidence: highestConfidence,
+        components: results,
+        method: 'pattern-fallback',
+        triggers: [...new Set(allTriggers)].slice(0, 5) // Top 5 unique triggers
+    };
+}
+
+// Robust analysis request function with retry logic and fallback
+async function sendAnalysisRequestWithRetry(analysisRequest, artistData, maxRetries = 2) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            console.log(`[Bluesky] Analysis attempt ${attempt}/${maxRetries} for:`, artistData.handle);
+            
+            // Check extension context before attempting to send message
+            if (!isExtensionContextValid()) {
+                throw new Error('Extension context invalidated');
+            }
+            
+            const response = await new Promise((resolve, reject) => {
+                // Set a shorter timeout for faster fallback
+                const timeout = setTimeout(() => {
+                    reject(new Error('Analysis request timeout'));
+                }, 15000); // 15 second timeout
+                
+                try {
+                    chrome.runtime.sendMessage(analysisRequest, (response) => {
+                        clearTimeout(timeout);
+                        
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                            return;
+                        }
+                        
+                        if (response && response.success) {
+                            const result = {
+                                ...artistData,
+                                analysis: response.result,
+                                confidence: response.result.confidence,
+                                commissionStatus: response.result.commissionStatus,
+                                triggers: response.result.triggers
+                            };
+                            resolve(result);
+                        } else {
+                            reject(new Error(response?.error || 'Analysis failed'));
+                        }
+                    });
+                } catch (error) {
+                    clearTimeout(timeout);
+                    reject(error);
+                }
+            });
+            
+            console.log('[Bluesky] Received analysis response:', response);
+            return response;
+            
+        } catch (error) {
+            console.warn(`[Bluesky] Analysis attempt ${attempt} failed:`, error.message);
+            
+            // Check if this is a connection error that suggests background script is unavailable
+            const isConnectionError = error.message.includes('Receiving end does not exist') ||
+                                     error.message.includes('message channel closed') ||
+                                     error.message.includes('Extension context invalidated');
+            
+            if (isConnectionError || attempt === maxRetries) {
+                console.log(`[Bluesky] Using pattern matching fallback for:`, artistData.handle);
+                
+                // Use local pattern matching fallback
+                const fallbackResult = patternAnalyzeComponentsFallback(analysisRequest.components);
+                
+                const result = {
+                    ...artistData,
+                    analysis: fallbackResult,
+                    confidence: fallbackResult.confidence,
+                    commissionStatus: fallbackResult.commissionStatus,
+                    triggers: fallbackResult.triggers
+                };
+                
+                console.log('[Bluesky] Fallback analysis result:', result);
+                return result;
+            }
+            
+            // Wait before retrying, but only for non-connection errors
+            if (!isConnectionError && attempt < maxRetries) {
+                const delay = 2000; // Fixed 2 second delay
+                console.log(`[Bluesky] Retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+}
 
 // Auto-start if we're on a Bluesky profile page
 if (window.location.hostname === 'bsky.app' && 

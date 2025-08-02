@@ -55,6 +55,10 @@ module.exports = {
             ignore: ['**/ort.all.js', '**/ort.all.js.map','**/ort.all.mjs','**/ort.all.mjs.map']
           }
          },
+         {
+          from: 'ort-wasm-simd.wasm',
+          to: 'onnxruntime-web/ort-wasm-simd.wasm'
+         },
         {
           from: 'benchmark.js',
           to: 'benchmark.js',

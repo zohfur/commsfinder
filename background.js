@@ -200,12 +200,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     if (request.type === 'ARTIST_FOUND') {
       handleArtistFound(request.data);
-      return true;
+      // No response needed for fire-and-forget messages
+      return false;
     }
       
     if (request.type === 'SCAN_COMPLETE') {
       handleScanComplete(request.platform, request.results);
-      return true;
+      // No response needed for fire-and-forget messages
+      return false;
     }
       
     if (request.type === 'GET_RESULTS') {
@@ -230,12 +232,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.type === 'SCAN_PROGRESS') {
       handleScanProgress(request.platform, request.data);
-      return true;
+      // No response needed for fire-and-forget messages
+      return false;
     }
 
     if (request.type === 'SCAN_ERROR') {
       handleScanError(request.platform, request.error);
-      return true;
+      // No response needed for fire-and-forget messages
+      return false;
     }
 
     if (request.type === 'UPDATE_TEMPERATURE') {
@@ -526,6 +530,7 @@ async function handleAnalyzeRequest(request, sender, sendResponse) {
         result = patternAnalyze(request.text);
       }
     } else {
+
       // AI mode - use the full AI analyzer
       const analyzer = await initializeAnalyzer();
       
@@ -533,6 +538,33 @@ async function handleAnalyzeRequest(request, sender, sendResponse) {
         result = await analyzer.analyzeComponents(request.components);
       } else {
         result = await analyzer.analyze(request.text, request.context || 'bio');
+      // AI mode - use the full AI analyzer with timeout protection
+      const analyzer = await initializeAnalyzer();
+      
+      // Add timeout protection to prevent service worker from being stopped
+      const analysisPromise = request.type === 'analyze_components' 
+        ? analyzer.analyzeComponents(request.components)
+        : analyzer.analyze(request.text, request.context || 'bio');
+      
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Analysis timeout - exceeded 25 seconds')), 25000);
+      });
+      
+      try {
+        result = await Promise.race([analysisPromise, timeoutPromise]);
+      } catch (timeoutError) {
+        if (timeoutError.message.includes('timeout')) {
+          console.warn('[Background] Analysis timed out, falling back to pattern matching');
+          // Fallback to pattern matching if AI times out
+          if (request.type === 'analyze_components') {
+            result = await patternAnalyzeComponents(request.components);
+          } else {
+            result = patternAnalyze(request.text);
+          }
+          result.method = 'pattern-fallback';
+        } else {
+          throw timeoutError;
+        }
       }
     }
     

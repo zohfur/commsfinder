@@ -49,6 +49,7 @@
         "content/*",
         "logos/*",
         "popup/*"
+        "onnxruntime-web/*"
       ],
       "matches": [
         "*://*.furaffinity.net/*",

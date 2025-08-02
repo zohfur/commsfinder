@@ -972,17 +972,9 @@ async function scanFurAffinity(existingProgress = null) {
                 
                 console.log('[CommsFinder] Sending analysis request:', analysisRequest);
 
-                chrome.runtime.sendMessage(analysisRequest, (response) => {
-                    console.log('[CommsFinder] Received analysis response:', response);
-                    if (response && response.success) {
-                        const result = {
-                            ...artistData,
-                            analysis: response.result,
-                            confidence: response.result.confidence,
-                            commissionStatus: response.result.commissionStatus,
-                            triggers: response.result.triggers
-                        };
-                        
+                try {
+                    const result = await sendAnalysisRequestWithRetry(analysisRequest, artistData);
+                    if (result) {
                         console.log('[CommsFinder] Final artist result:', result);
                         
                         // Report found artist
@@ -990,10 +982,11 @@ async function scanFurAffinity(existingProgress = null) {
                             type: 'ARTIST_FOUND',
                             data: result
                         });
-                    } else {
-                        console.error('[CommsFinder] Analysis failed:', response?.error || 'Unknown error');
                     }
-                });
+                } catch (error) {
+                    console.error('[CommsFinder] Analysis failed after retries:', error);
+                    // Continue with next artist instead of failing completely
+                }
             }
             
             await rateLimitedDelay();
@@ -1043,6 +1036,283 @@ function formatDataForAnalysis(artistData) {
     };
     console.log('[CommsFinder] Formatted data:', formatted);
     return formatted;
+}
+
+// Pattern matching fallback when background script is unavailable
+const OPEN_PATTERNS = [
+    /\bcomm?(?:ission)?s?\s*(?:are\s+)?open\b/i,
+    /\bc0mm?(?:ission)?s?\s*(?:are\s+)?open\b/i,
+    /\bc0mm?s?\s*0pen\b/i,
+    /\bc\*mm?s?\s*open\b/i,
+    /\btaking\s+comm?(?:ission)?s?\b/i,
+    /\bcomm?(?:ission)?s?\s+slots?\s+(?:open|available)\b/i,
+    /\bopen\s+for\s+comm?(?:ission)?s?\b/i,
+    /\bopen\s+comm?(?:ission)?s?\b/i,
+    /\bcommissions?\s*:\s*open\b/i,
+    /\bcommisisons\s+open\b/i,
+    /\bСommission\s*-\s*open\b/i,
+    /\baccept(?:ing)?\s+comm?(?:ission)?s?\b/i,
+    /\bslots?\s+available\b/i,
+    /\bdm\s+(?:me\s+)?for\s+comm?(?:ission)?s?\b/i,
+    /\bqueue\s+(?:is\s+)?open\b/i
+];
+
+const CLOSED_PATTERNS = [
+    /\bcomm?(?:ission)?s?\s*(?:are\s+)?closed?\b/i,
+    /\bc\*mm?s?\s*closed?\b/i,
+    /\bcom?s?\s*closed?\b/i,
+    /\bnot\s+taking\s+comm?(?:ission)?s?\b/i,
+    /\bno\s+comm?(?:ission)?s?\b/i,
+    /\bclosed\s+(?:for\s+)?comm?(?:ission)?s?\b/i,
+    /\bhiatus\b/i,
+    /\bcomm?(?:ission)?s?\s*(?:are\s+)?(?:full|unavailable)\b/i,
+    /\bcommissions?\s*:\s*closed\b/i,
+    /\bqueue\s*(?:is\s+)?(?:full|closed)\b/i,
+    /\bnot\s+accept(?:ing)?\s+comm?(?:ission)?s?\b/i,
+    /\bfully\s+booked\b/i,
+    /\bwaitlist\s+(?:is\s+)?closed\b/i
+];
+
+function patternAnalyzeFallback(text) {
+    if (!text) {
+        return {
+            commissionStatus: 'unclear',
+            confidence: 0.3,
+            method: 'pattern-fallback',
+            triggers: []
+        };
+    }
+
+    const openMatches = [];
+    const closedMatches = [];
+    
+    // Check for open patterns
+    for (const pattern of OPEN_PATTERNS) {
+        const match = text.match(pattern);
+        if (match) {
+            openMatches.push(match[0]);
+        }
+    }
+    
+    // Check for closed patterns
+    for (const pattern of CLOSED_PATTERNS) {
+        const match = text.match(pattern);
+        if (match) {
+            closedMatches.push(match[0]);
+        }
+    }
+    
+    let commissionStatus = 'unclear';
+    let confidence = 0.3;
+    let triggers = [];
+    
+    if (closedMatches.length > 0 && openMatches.length === 0) {
+        commissionStatus = 'closed';
+        confidence = Math.min(0.8 + (closedMatches.length * 0.05), 0.95);
+        triggers = closedMatches;
+    } else if (openMatches.length > 0 && closedMatches.length === 0) {
+        commissionStatus = 'open';
+        confidence = Math.min(0.8 + (openMatches.length * 0.05), 0.95);
+        triggers = openMatches;
+    } else if (openMatches.length > 0 && closedMatches.length > 0) {
+        // Conflicting signals - use the one with more matches
+        if (closedMatches.length > openMatches.length) {
+            commissionStatus = 'closed';
+            confidence = 0.6;
+            triggers = closedMatches;
+        } else {
+            commissionStatus = 'open';
+            confidence = 0.6;
+            triggers = openMatches;
+        }
+    }
+    
+    return {
+        commissionStatus,
+        confidence,
+        method: 'pattern-fallback',
+        triggers: [...new Set(triggers)] // Unique triggers
+    };
+}
+
+function patternAnalyzeComponentsFallback(components) {
+    const results = {
+        displayName: null,
+        bio: null,
+        journal: null,
+        gallery: null,
+        posts: null
+    };
+    
+    let highestConfidence = 0;
+    let overallStatus = 'unclear';
+    let allTriggers = [];
+    
+    // Analyze bio with high weight
+    if (components.bio) {
+        const bioResult = patternAnalyzeFallback(components.bio);
+        results.bio = bioResult;
+        
+        if (bioResult.confidence > highestConfidence) {
+            highestConfidence = bioResult.confidence;
+            overallStatus = bioResult.commissionStatus;
+        }
+        allTriggers.push(...bioResult.triggers);
+    }
+    
+    // Analyze commission status
+    if (components.commissionStatus) {
+        const statusResult = patternAnalyzeFallback(components.commissionStatus);
+        results.commissionStatus = statusResult;
+        
+        if (statusResult.confidence > highestConfidence) {
+            highestConfidence = statusResult.confidence;
+            overallStatus = statusResult.commissionStatus;
+        }
+        allTriggers.push(...statusResult.triggers);
+    }
+    
+    // Analyze journal if present
+    if (components.journal && components.journal.text) {
+        const journalResult = patternAnalyzeFallback(components.journal.text);
+        results.journal = {
+            ...journalResult,
+            date: components.journal.date
+        };
+        
+        // Recent journal has more weight
+        const isRecent = components.journal.date && 
+                        (Date.now() - new Date(components.journal.date).getTime()) < 30 * 24 * 60 * 60 * 1000;
+        
+        if (isRecent && journalResult.confidence > highestConfidence) {
+            highestConfidence = journalResult.confidence;
+            overallStatus = journalResult.commissionStatus;
+        }
+        allTriggers.push(...journalResult.triggers);
+    }
+    
+    // Analyze gallery items if present
+    if (components.galleryItems && Array.isArray(components.galleryItems)) {
+        const galleryResults = [];
+        for (const item of components.galleryItems) {
+            const itemText = `${item.title || ''} ${item.description || ''} ${item.tags || ''}`.trim();
+            if (itemText) {
+                const itemResult = patternAnalyzeFallback(itemText);
+                galleryResults.push({
+                    ...itemResult,
+                    url: item.url,
+                    date: item.date
+                });
+                allTriggers.push(...itemResult.triggers);
+            }
+        }
+        
+        if (galleryResults.length > 0) {
+            // Use the most confident gallery result
+            const bestGalleryResult = galleryResults.reduce((best, current) => 
+                current.confidence > best.confidence ? current : best
+            );
+            
+            results.gallery = {
+                items: galleryResults,
+                confidence: bestGalleryResult.confidence,
+                commissionStatus: bestGalleryResult.commissionStatus
+            };
+            
+            if (bestGalleryResult.confidence > highestConfidence * 0.8) {
+                // Gallery can influence but not override strong signals
+                overallStatus = bestGalleryResult.commissionStatus;
+            }
+        }
+    }
+    
+    // Return final result
+    return {
+        commissionStatus: overallStatus,
+        confidence: highestConfidence,
+        components: results,
+        method: 'pattern-fallback',
+        triggers: [...new Set(allTriggers)].slice(0, 5) // Top 5 unique triggers
+    };
+}
+
+// Robust analysis request function with retry logic and fallback
+async function sendAnalysisRequestWithRetry(analysisRequest, artistData, maxRetries = 2) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            console.log(`[CommsFinder] Analysis attempt ${attempt}/${maxRetries} for:`, artistData.username);
+            
+            const response = await new Promise((resolve, reject) => {
+                // Set a shorter timeout for faster fallback
+                const timeout = setTimeout(() => {
+                    reject(new Error('Analysis request timeout'));
+                }, 15000); // 15 second timeout
+                
+                try {
+                    chrome.runtime.sendMessage(analysisRequest, (response) => {
+                        clearTimeout(timeout);
+                        
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                            return;
+                        }
+                        
+                        if (response && response.success) {
+                            const result = {
+                                ...artistData,
+                                analysis: response.result,
+                                confidence: response.result.confidence,
+                                commissionStatus: response.result.commissionStatus,
+                                triggers: response.result.triggers
+                            };
+                            resolve(result);
+                        } else {
+                            reject(new Error(response?.error || 'Analysis failed'));
+                        }
+                    });
+                } catch (error) {
+                    clearTimeout(timeout);
+                    reject(error);
+                }
+            });
+            
+            console.log('[CommsFinder] Received analysis response:', response);
+            return response;
+            
+        } catch (error) {
+            console.warn(`[CommsFinder] Analysis attempt ${attempt} failed:`, error.message);
+            
+            // Check if this is a connection error that suggests background script is unavailable
+            const isConnectionError = error.message.includes('Receiving end does not exist') ||
+                                     error.message.includes('message channel closed') ||
+                                     error.message.includes('Extension context invalidated');
+            
+            if (isConnectionError || attempt === maxRetries) {
+                console.log(`[CommsFinder] Using pattern matching fallback for:`, artistData.username);
+                
+                // Use local pattern matching fallback
+                const fallbackResult = patternAnalyzeComponentsFallback(analysisRequest.components);
+                
+                const result = {
+                    ...artistData,
+                    analysis: fallbackResult,
+                    confidence: fallbackResult.confidence,
+                    commissionStatus: fallbackResult.commissionStatus,
+                    triggers: fallbackResult.triggers
+                };
+                
+                console.log('[CommsFinder] Fallback analysis result:', result);
+                return result;
+            }
+            
+            // Wait before retrying, but only for non-connection errors
+            if (!isConnectionError && attempt < maxRetries) {
+                const delay = 2000; // Fixed 2 second delay
+                console.log(`[CommsFinder] Retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
 }
 
 // Listen for messages from the background script
