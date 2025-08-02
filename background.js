@@ -576,7 +576,8 @@ async function handleAnalyzeRequest(request, sender, sendResponse) {
       result: result 
     });
     
-  } catch (error) {
+  } 
+} catch (error) {
     console.error('[Background] Analysis failed:', error);
     sendResponse({ 
       success: false, 

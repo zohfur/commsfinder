@@ -48,7 +48,7 @@
         "utils/*",
         "content/*",
         "logos/*",
-        "popup/*"
+        "popup/*",
         "onnxruntime-web/*"
       ],
       "matches": [
