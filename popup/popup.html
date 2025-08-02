@@ -171,6 +171,7 @@
 
     <!-- CommsClassifier Promo Section -->
     <div id="commsClassifierPromo" class="classifier-promo" style="display: none;">
+      <button class="section-close-btn" id="promoCloseBtn" title="Close">&times;</button>
       <div class="promo-content">
         <div class="promo-header">
           <img src="../icons/icon128.png" alt="CommsClassifier Logo" class="promo-logo">
@@ -187,62 +188,77 @@
             Firefox Add-ons
           </a>
         </div>
+        <div class="hide-options" id="promoHideOptions" style="display: none;">
+          <p>Hide this section:</p>
+          <div class="hide-buttons">
+            <button class="hide-btn" id="promoHideForever">Hide Forever</button>
+            <button class="hide-btn" id="promoHideFor3Days">Hide for now</button>
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- Roadmap Section -->
     <div class="roadmap-section">
-      <div class="roadmap-header">
+      <div class="roadmap-header" style="display: flex; justify-content: space-between; align-items: center;">
         <h3>🗺️ What's Next?</h3>
+        <button class="roadmap-toggle-btn" id="roadmapToggleBtn" title="Minimize/Maximize Roadmap">
+          <span class="toggle-icon">▼</span>
+        </button>
+      </div>
+      
+      <div class="roadmap-eta">
         <span class="eta-tag">ETA: when there's motivation 💀</span>
       </div>
       
-      <div class="roadmap-items">
-        <div class="roadmap-item">
-          <div class="version-tag">v1.1</div>
-          <div class="roadmap-content">
-            <h4>Polish Update</h4>
-            <ul>
-              <li>Improve UI and scan experience</li>
-              <li>Bug fixing</li>
-              <li>Implement user feedback</li>
-            </ul>
+      <div class="roadmap-content-wrapper" id="roadmapContent">
+        <div class="roadmap-items">
+          <div class="roadmap-item">
+            <div class="version-tag">v1.1</div>
+            <div class="roadmap-content">
+              <h4>Polish Update</h4>
+              <ul>
+                <li>Improve UI and scan experience</li>
+                <li>Bug fixing</li>
+                <li>Implement user feedback</li>
+              </ul>
+            </div>
           </div>
-        </div>
 
-        <div class="roadmap-item">
-          <div class="version-tag">v1.2</div>
-          <div class="roadmap-content">
-            <h4>NoAI Mode</h4>
-            <ul>
-              <li>Regex and keyword-based detection</li>
-              <li>Manual dictionary support</li>
-            </ul>
+          <div class="roadmap-item">
+            <div class="version-tag">v1.2</div>
+            <div class="roadmap-content">
+              <h4>NoAI Mode</h4>
+              <ul>
+                <li>Regex and keyword-based detection</li>
+                <li>Manual dictionary support</li>
+              </ul>
+            </div>
           </div>
-        </div>
 
-        <div class="roadmap-item">
-          <div class="version-tag">v1.3</div>
-          <div class="roadmap-content">
-            <h4>Community Verification</h4>
-            <ul>
-              <li>Report scan accuracy</li>
-              <li>Submit open artist status</li>
-            </ul>
+          <div class="roadmap-item">
+            <div class="version-tag">v1.3</div>
+            <div class="roadmap-content">
+              <h4>Community Verification</h4>
+              <ul>
+                <li>Report scan accuracy</li>
+                <li>Submit open artist status</li>
+              </ul>
+            </div>
           </div>
-        </div>
 
-        <div class="roadmap-item">
-          <div class="version-tag">v1.4</div>
-          <div class="roadmap-content">
-            <h4>Platform Expansion</h4>
-            <ul>
-              <li>YCH.commishes</li>
-              <li>Weasyl</li>
-              <li>Artistree</li>
-              <li>Artconomy</li>
-              <li>And more!</li>
-            </ul>
+          <div class="roadmap-item">
+            <div class="version-tag">v1.4</div>
+            <div class="roadmap-content">
+              <h4>Platform Expansion</h4>
+              <ul>
+                <li>YCH.commishes</li>
+                <li>Weasyl</li>
+                <li>Artistree</li>
+                <li>Artconomy</li>
+                <li>And more!</li>
+              </ul>
+            </div>
           </div>
         </div>
       </div>
@@ -250,6 +266,7 @@
 
     <!-- Feedback Section -->
     <div class="feedback-section" style="display: none;">
+      <button class="section-close-btn" id="feedbackCloseBtn" title="Close">&times;</button>
       <div class="feedback-header">
         <h3>💭 Share Your Thoughts</h3>
       </div>
@@ -274,6 +291,13 @@
           <span class="feedback-btn-icon">📝</span>
           Quick Feedback
         </a>
+      </div>
+      <div class="hide-options" id="feedbackHideOptions" style="display: none;">
+        <p>Hide this section:</p>
+        <div class="hide-buttons">
+          <button class="hide-btn" id="feedbackHideForever">Hide Forever</button>
+          <button class="hide-btn" id="feedbackHideFor3Days">Hide for now</button>
+        </div>
       </div>
     </div>
 
@@ -336,6 +360,14 @@
                 <table></table>
               </div>
             </div>
+          </div>
+          
+          <div class="setting-group">
+            <label class="setting-label">
+              <input type="checkbox" id="zenMode">
+              Zen Mode
+            </label>
+            <p class="setting-description">Removes all distractions.</p>
           </div>
           
           <div class="setting-group">

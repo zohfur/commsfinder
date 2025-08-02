@@ -549,6 +549,25 @@ body {
   opacity: 1;
 }
 
+.result-item.favorited {
+    background: rgba(255, 255, 0, 0.08);
+    border-left: 3px solid #fbbf24;
+}
+
+.result-item.blacklisted {
+    background: rgba(239, 68, 68, 0.15);
+    border-left: 3px solid #ef4444;
+}
+
+.result-item.blacklisted .result-name {
+    color: #fca5a5;
+}
+
+.result-item.blacklisted .result-triggers {
+    color: #fca5a5;
+}
+
+/* Legacy support for any remaining artist-item classes */
 .artist-item.favorited {
     background: rgba(255, 255, 200, 0.1);
     box-shadow: 0 0 10px rgba(255, 255, 0, 0.1);
@@ -1433,6 +1452,7 @@ body {
   border: 1px solid rgba(99, 102, 241, 0.2);
   border-radius: 8px;
   transition: all 0.3s ease;
+  position: relative;
 }
 
 .classifier-promo:hover {
@@ -1526,6 +1546,56 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.roadmap-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.roadmap-toggle-btn {
+  background: rgba(55, 65, 81, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #d1d5db;
+  cursor: pointer;
+  padding: 6px 10px;
+  font-size: 12px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.roadmap-toggle-btn:hover {
+  background: rgba(75, 85, 99, 0.8);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.roadmap-toggle-btn:active {
+  transform: translateY(1px);
+}
+
+.toggle-icon {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.roadmap-section.minimized .toggle-icon {
+  transform: rotate(-90deg);
+}
+
+.roadmap-content-wrapper {
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.roadmap-section.minimized .roadmap-content-wrapper {
+  max-height: 0;
+  opacity: 0;
+  margin-top: -20px;
+}
+
 .roadmap-header {
   display: flex;
   align-items: center;
@@ -1538,6 +1608,10 @@ body {
   font-size: 18px;
   font-weight: 600;
   margin: 0;
+}
+
+.roadmap-eta {
+  padding-bottom: 20px;
 }
 
 .eta-tag {
@@ -1623,6 +1697,7 @@ body {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(6, 182, 212, 0.1) 100%);
   border-radius: 12px;
   border: 1px solid rgba(16, 185, 129, 0.2);
+  position: relative;
 }
 
 .feedback-header {
@@ -1831,4 +1906,66 @@ body {
     margin: 8px 0;
     font-size: 14px;
     color: #6b7280;
+}
+
+/* Section Close Button */
+.section-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  z-index: 1;
+}
+
+.section-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+/* Hide Options */
+.hide-options {
+  margin-top: 16px;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.hide-options p {
+  color: #d1d5db;
+  font-size: 13px;
+  margin: 0 0 8px 0;
+}
+
+.hide-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.hide-btn {
+  padding: 6px 12px;
+  border: 1px solid #374151;
+  background: #1f2937;
+  color: #e5e7eb;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s ease;
+  flex: 1;
+}
+
+.hide-btn:hover {
+  background: #374151;
+  border-color: #4b5563;
+}
+
+.hide-btn:active {
+  background: #111827;
 }

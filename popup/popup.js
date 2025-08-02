@@ -16,6 +16,7 @@ class CommisionsfinderPopup {
       aiEnabled: true,  // Changed from false to true - AI enabled by default
       selectedQuantization: 'full',
       debugMode: false, // Debug mode disabled by default
+      zenMode: false, // Zen mode disabled by default
       platforms: {
         furaffinity: true,
         twitter: false, // Twitter is disabled
@@ -75,6 +76,7 @@ class CommisionsfinderPopup {
     this.temperatureValue = document.getElementById('temperatureValue');
     this.clearAllData = document.getElementById('clearAllData');
     this.debugMode = document.getElementById('debugMode');
+    this.zenMode = document.getElementById('zenMode');
     
     // Loading overlay
     this.loadingOverlay = document.getElementById('loadingOverlay');
@@ -83,6 +85,8 @@ class CommisionsfinderPopup {
     // CommsClassifier promo, roadmap, and feedback
     this.commsClassifierPromo = document.getElementById('commsClassifierPromo');
     this.roadmapSection = document.querySelector('.roadmap-section');
+    this.roadmapToggleBtn = document.getElementById('roadmapToggleBtn');
+    this.roadmapContent = document.getElementById('roadmapContent');
     this.feedbackSection = document.querySelector('.feedback-section');
 
     // Benchmark elements
@@ -134,10 +138,11 @@ class CommisionsfinderPopup {
     });
     this.clearAllData.addEventListener('click', () => this.clearAllData());
     this.debugMode.addEventListener('change', () => this.updateDebugMode());
+    this.zenMode.addEventListener('change', () => this.updateZenMode());
     
     // Listen for messages from background script
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      this.handleBackgroundMessage(message);
+      this.handleBackgroundMessage(message, sender, sendResponse);
     });
 
     // Global click handler to close platform dropdowns
@@ -181,6 +186,9 @@ class CommisionsfinderPopup {
       });
     }
 
+    // Roadmap toggle
+    this.roadmapToggleBtn.addEventListener('click', () => this.toggleRoadmap());
+
     // Benchmark button
     if (this.runBenchmarkBtn) {
       this.runBenchmarkBtn.addEventListener('click', () => this.startBenchmark());
@@ -190,7 +198,7 @@ class CommisionsfinderPopup {
   async loadSettings() {
     try {
       const result = await chrome.storage.local.get([
-        'aiEnabled', 'selectedQuantization', 'platforms', 'modelTemperature', 'debugMode'
+        'aiEnabled', 'selectedQuantization', 'platforms', 'modelTemperature', 'debugMode', 'zenMode', 'roadmapMinimized'
       ]);
       
       if (result.aiEnabled !== undefined) {
@@ -217,6 +225,12 @@ class CommisionsfinderPopup {
         this.debugMode.checked = result.debugMode;
       }
       
+      if (result.zenMode !== undefined) {
+        this.settings.zenMode = result.zenMode;
+        this.zenMode.checked = result.zenMode;
+        this.toggleZenMode(result.zenMode);
+      }
+      
       if (result.platforms) {
         this.settings.platforms = { ...this.settings.platforms, ...result.platforms };
         this.platformFuraffinity.checked = this.settings.platforms.furaffinity;
@@ -226,6 +240,14 @@ class CommisionsfinderPopup {
         this.settings.platforms.twitter = false;
       }
       
+      // Restore roadmap state
+      if (result.roadmapMinimized !== undefined && result.roadmapMinimized) {
+        this.roadmapSection.classList.add('minimized');
+        const toggleIcon = this.roadmapToggleBtn.querySelector('.toggle-icon');
+        toggleIcon.textContent = '❯';
+        this.roadmapToggleBtn.title = 'Expand Roadmap';
+      }
+
       // Show/hide model selection based on AI enabled status
       const modelSelectionGroup = document.getElementById('modelSelectionGroup');
       if (modelSelectionGroup) {
@@ -246,7 +268,7 @@ class CommisionsfinderPopup {
     }
   }
   
-  async toggleFavorite(artistId, artistData) {
+  async toggleFavorite(artistId) {
     if (this.favorites.has(artistId)) {
       this.favorites.delete(artistId);
     } else {
@@ -257,7 +279,7 @@ class CommisionsfinderPopup {
     this.applyFilters();
   }
   
-  async toggleBlacklist(artistId, artistData) {
+  async toggleBlacklist(artistId) {
     if (this.blacklist.has(artistId)) {
       this.blacklist.delete(artistId);
     } else {
@@ -1162,14 +1184,14 @@ class CommisionsfinderPopup {
     
     favoriteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.toggleFavorite(artistId, result);
+      this.toggleFavorite(artistId);
       favoriteBtn.classList.toggle('active');
       favoriteBtn.textContent = favoriteBtn.classList.contains('active') ? '⭐' : '☆';
     });
     
     blacklistBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.toggleBlacklist(artistId, result);
+      this.toggleBlacklist(artistId);
       blacklistBtn.classList.toggle('active');
     });
     
@@ -1795,6 +1817,28 @@ class CommisionsfinderPopup {
   closeSettings() {
     this.settingsModal.style.display = 'none';
   }
+
+  toggleRoadmap() {
+    const isMinimized = this.roadmapSection.classList.contains('minimized');
+    const toggleIcon = this.roadmapToggleBtn.querySelector('.toggle-icon');
+    
+    if (isMinimized) {
+      // Expand
+      this.roadmapSection.classList.remove('minimized');
+      toggleIcon.textContent = '⇓';
+      this.roadmapToggleBtn.title = 'Minimize Roadmap';
+    } else {
+      // Minimize
+      this.roadmapSection.classList.add('minimized');
+      toggleIcon.textContent = '❯❯';
+      this.roadmapToggleBtn.title = 'Expand Roadmap';
+    }
+
+    // Save the state to storage
+    chrome.storage.local.set({
+      roadmapMinimized: !isMinimized
+    });
+  }
   
   async clearAllData() {
     if (confirm('Are you sure you want to clear all scan results and settings? This will remove all cached artist data and start fresh.')) {
@@ -2138,6 +2182,39 @@ getSpeedClass(samplesPerSecond) {
     } catch (error) {
       console.error('Error updating debug mode:', error);
       this.showError('Failed to update debug mode');
+    }
+  }
+  
+  async updateZenMode() {
+    this.settings.zenMode = this.zenMode.checked;
+    
+    try {
+      await chrome.storage.local.set({
+        zenMode: this.settings.zenMode
+      });
+      
+      this.toggleZenMode(this.settings.zenMode);
+      this.showSuccess(`Zen mode ${this.settings.zenMode ? 'enabled' : 'disabled'}`);
+    } catch (error) {
+      console.error('Error updating zen mode:', error);
+      this.showError('Failed to update zen mode');
+    }
+  }
+  
+  toggleZenMode(enabled) {
+    // Hide/show promo section
+    if (this.commsClassifierPromo) {
+      this.commsClassifierPromo.style.display = enabled ? 'none' : '';
+    }
+    
+    // Hide/show roadmap section
+    if (this.roadmapSection) {
+      this.roadmapSection.style.display = enabled ? 'none' : '';
+    }
+    
+    // Hide/show feedback section
+    if (this.feedbackSection) {
+      this.feedbackSection.style.display = enabled ? 'none' : '';
     }
   }
 }
