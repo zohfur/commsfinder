@@ -221,6 +221,7 @@ function isExtensionContextValid() {
     try {
         return !!(chrome && chrome.runtime && chrome.runtime.id);
     } catch (error) {
+        console.error('[Bluesky] Error checking extension context:', error);
         return false;
     }
 }

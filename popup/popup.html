@@ -301,6 +301,40 @@
       </div>
     </div>
 
+    <!-- Disclaimer Modal -->
+    <div class="disclaimer-overlay" id="disclaimerOverlay">
+      <div class="disclaimer-content">
+        <div class="disclaimer-page" id="disclaimerPage1">
+          <div class="disclaimer-header">
+            <img src="../icons/icon48.png" alt="Commsfinder" class="disclaimer-icon">
+            <h2>Important Notice</h2>
+          </div>
+          <div class="disclaimer-body">
+            <p class="disclaimer-text">This extension uses <strong>discriminative</strong> AI.</p>
+            <p class="disclaimer-text">Think image and pattern recognition, NOT generative AI.</p>
+          </div>
+          <div class="disclaimer-actions">
+            <button class="disclaimer-btn primary" id="disclaimerNextBtn">Next</button>
+          </div>
+        </div>
+        
+        <div class="disclaimer-page" id="disclaimerPage2" style="display: none;">
+          <div class="disclaimer-header">
+            <img src="../icons/icon48.png" alt="Commsfinder" class="disclaimer-icon">
+            <h2>Model Download</h2>
+          </div>
+          <div class="disclaimer-body">
+            <p class="disclaimer-text">Upon your first scan, a custom classification model (75mb) will be downloaded.</p>
+            <p class="disclaimer-text">No action is needed on your part, and this model will be cached for future use.</p>
+          </div>
+          <div class="disclaimer-actions">
+            <button class="disclaimer-btn secondary" id="disclaimerBackBtn">Back</button>
+            <button class="disclaimer-btn primary" id="disclaimerOkBtn">OK</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings Modal -->
     <div class="modal" id="settingsModal" style="display: none;">
       <div class="modal-content">
@@ -320,7 +354,7 @@
             </p>
           </div>
           
-          <div class="setting-group" id="modelSelectionGroup">
+          <div class="setting-group" id="modelSelectionGroup" style="display: none;">
             <label class="setting-label">Model Quantization</label>
             <select id="modelSelector" class="model-select">
               <option value="quantized">Quantized INT8 (67.5 MB) - Recommended</option>
@@ -368,6 +402,14 @@
               Zen Mode
             </label>
             <p class="setting-description">Removes all distractions.</p>
+          </div>
+          
+          <div class="setting-group">
+            <label class="setting-label">
+              <input type="checkbox" id="demoMode">
+              Demo Mode
+            </label>
+            <p class="setting-description">Hides artist names, blurs profile pictures, and replaces text content with Lorem Ipsum to protect privacy during demonstrations.</p>
           </div>
           
           <div class="setting-group">

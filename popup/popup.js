@@ -13,13 +13,14 @@ class CommisionsfinderPopup {
     this.debugSearch = false; // Enable search debugging (toggle with window.popup.toggleSearchDebug())
     this.searchDebounceTimer = null; // For debounced search
     this.settings = {
-      aiEnabled: true,  // Changed from false to true - AI enabled by default
+      aiEnabled: true,  // AI enabled by default since no-AI mode is still in development
       selectedQuantization: 'full',
       debugMode: false, // Debug mode disabled by default
       zenMode: false, // Zen mode disabled by default
+      demoMode: false, // Demo mode disabled by default
       platforms: {
         furaffinity: true,
-        twitter: false, // Twitter is disabled
+        twitter: false, // Twitter is disabled, reasons explained in the disclaimer
         bluesky: true
       }
     };
@@ -31,9 +32,12 @@ class CommisionsfinderPopup {
     this.checkModelStatus();
     this.checkBenchmarkAvailability();
     this.loadFavoritesAndBlacklist();
+    this.checkDisclaimerAcknowledgment();
   }
   
   initializeElements() {
+    // Peep the horror.
+
     // Main elements
     this.scanBtn = document.getElementById('scanBtn');
     this.stopBtn = document.getElementById('stopBtn');
@@ -78,6 +82,7 @@ class CommisionsfinderPopup {
     this.clearAllData = document.getElementById('clearAllData');
     this.debugMode = document.getElementById('debugMode');
     this.zenMode = document.getElementById('zenMode');
+    this.demoMode = document.getElementById('demoMode');
     
     // Loading overlay
     this.loadingOverlay = document.getElementById('loadingOverlay');
@@ -104,7 +109,17 @@ class CommisionsfinderPopup {
     this.benchmarkProgress = document.querySelector('.benchmark-progress');
     this.benchmarkResults = document.getElementById('benchmarkResults');
     this.benchmarkTable = this.benchmarkResults.querySelector('table');
+    
+    // Disclaimer elements
+    this.disclaimerOverlay = document.getElementById('disclaimerOverlay');
+    this.disclaimerPage1 = document.getElementById('disclaimerPage1');
+    this.disclaimerPage2 = document.getElementById('disclaimerPage2');
+    this.disclaimerNextBtn = document.getElementById('disclaimerNextBtn');
+    this.disclaimerBackBtn = document.getElementById('disclaimerBackBtn');
+    this.disclaimerOkBtn = document.getElementById('disclaimerOkBtn');
   }
+
+  // Pretend you didn't see that.
   
   bindEvents() {
     // Scan and stop buttons
@@ -148,6 +163,7 @@ class CommisionsfinderPopup {
     this.clearAllData.addEventListener('click', () => this.clearAllData());
     this.debugMode.addEventListener('change', () => this.updateDebugMode());
     this.zenMode.addEventListener('change', () => this.updateZenMode());
+    this.demoMode.addEventListener('change', () => this.updateDemoMode());
     
     // Listen for messages from background script
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -224,12 +240,23 @@ class CommisionsfinderPopup {
     if (this.runBenchmarkBtn) {
       this.runBenchmarkBtn.addEventListener('click', () => this.startBenchmark());
     }
+    
+    // Disclaimer buttons
+    if (this.disclaimerNextBtn) {
+      this.disclaimerNextBtn.addEventListener('click', () => this.showDisclaimerPage2());
+    }
+    if (this.disclaimerBackBtn) {
+      this.disclaimerBackBtn.addEventListener('click', () => this.showDisclaimerPage1());
+    }
+    if (this.disclaimerOkBtn) {
+      this.disclaimerOkBtn.addEventListener('click', () => this.acceptDisclaimer());
+    }
   }
   
   async loadSettings() {
     try {
       const result = await chrome.storage.local.get([
-        'aiEnabled', 'selectedQuantization', 'platforms', 'modelTemperature', 'debugMode', 'zenMode', 'roadmapMinimized',
+        'aiEnabled', 'selectedQuantization', 'platforms', 'modelTemperature', 'debugMode', 'zenMode', 'demoMode', 'roadmapMinimized',
         'promoHiddenForever', 'promoHiddenUntil', 'feedbackHiddenForever', 'feedbackHiddenUntil'
       ]);
       
@@ -261,6 +288,11 @@ class CommisionsfinderPopup {
         this.settings.zenMode = result.zenMode;
         this.zenMode.checked = result.zenMode;
         this.toggleZenMode(result.zenMode);
+      }
+      
+      if (result.demoMode !== undefined) {
+        this.settings.demoMode = result.demoMode;
+        this.demoMode.checked = result.demoMode;
       }
       
       if (result.platforms) {
@@ -1082,14 +1114,14 @@ class CommisionsfinderPopup {
   
   hideFilteredEmptyState() {
     // No longer needed since we show empty results inline
-    // Keeping method for compatibility but it's now a no-op
+    // Keeping method for compatibility but it's useless now :p
   }
   
   createResultElement(result) {
     const element = document.createElement('div');
     element.className = 'result-item fade-in';
     
-    // Use transformed confidence for main display (represents likelihood of open commissions)
+    // Use final confidence for main display (represents likelihood of open commissions)
     const confidencePercent = this.getDisplayConfidence(result);
     const confidenceClass = confidencePercent >= 70 ? 'high' : 
                            confidencePercent >= 50 ? 'medium' : 'low';
@@ -1135,12 +1167,16 @@ class CommisionsfinderPopup {
     const isFavorited = this.favorites.has(artistId);
     const isBlacklisted = this.blacklist.has(artistId);
     
+    // Apply demo mode transformations
+    const displayName = this.settings.demoMode ? this.getDemoDisplayName(result.displayName) : result.displayName;
+    const avatarClasses = this.settings.demoMode ? 'result-avatar demo-blur' : 'result-avatar';
+    
     element.innerHTML = `
       <img src="${result.avatarUrl || this.getDefaultAvatar()}" 
-           alt="${result.displayName}" 
-           class="result-avatar">
+           alt="${displayName}" 
+           class="${avatarClasses}">
       <div class="result-info" style="cursor: pointer;">
-        <div class="result-name" title="${result.displayName}">${result.displayName}</div>
+        <div class="result-name" title="${displayName}">${displayName}</div>
         <div class="result-platform">
           ${platformIconsHtml} ${platformNames}
           ${result.platforms && result.platforms.length > 1 ? 
@@ -1344,13 +1380,74 @@ class CommisionsfinderPopup {
         return names.slice(0, -1).join(', ') + ' + ' + names[names.length - 1];
       }
     } else {
-      // Single platform
+      // If only single platform
       return this.formatPlatformName(result.platform);
     }
   }
   
   getDefaultAvatar() {
+    // Placeholder avatar
     return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMjAiIGZpbGw9IiMzNzQxNTEiLz4KPGNpcmNsZSBjeD0iMjAiIGN5PSIxNiIgcj0iNiIgZmlsbD0iIzZCNzI4MCIvPgo8cGF0aCBkPSJNNCAzMmMwLTggOC04IDE2LTggczE2IDAgMTYgOCIgZmlsbD0iIzZCNzI4MCIvPgo8L3N2Zz4K';
+  }
+  
+  getDemoDisplayName(originalName) {
+    // Generate random demo names by concatenating two random parts
+    const nameParts = [
+      'Crungy', 'Spingus', 'Bongus', 'Roingus', 'Boingu', 'Goobus', 'Gooperson',
+      'Man #3', 'Scrimmy', 'Bingus', 'Scrumpus', 'Croungus', 'The Horror',
+      'Crimbus', 'Chongo', 'Chungus', 'Scungus', 'Scrimblo', 'Person', 'Crogus',
+      'Bean', 'Baby Corn', 'Jorge', 'Creature #2', 'Beebo', 'Gary', 'Glorbo',
+      'Glorp', 'John Art', 'Kyle', 'McGuy', 'Mister'
+    ];
+    
+    // Use the original name to generate consistent indices
+    let hash = 0;
+    for (let i = 0; i < originalName.length; i++) {
+      const char = originalName.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    
+    // Generate two consistent indices based on the hash
+    const firstIndex = Math.abs(hash) % nameParts.length;
+    const secondIndex = Math.abs(hash >> 8) % nameParts.length;
+    
+    // Ensure we don't get the same part twice
+    const adjustedSecondIndex = (secondIndex === firstIndex) ? 
+      (secondIndex + 1) % nameParts.length : secondIndex;
+    
+    return `${nameParts[firstIndex]} ${nameParts[adjustedSecondIndex]}`;
+  }
+  
+  getDemoLoremText(originalText, maxLength = 100) {
+    const loremWords = [
+      'Lorem', 'ipsum', 'dolor', 'sit', 'amet', 'consectetur', 'adipiscing', 'elit',
+      'sed', 'do', 'eiusmod', 'tempor', 'incididunt', 'ut', 'labore', 'et', 'dolore',
+      'magna', 'aliqua', 'Ut', 'enim', 'ad', 'minim', 'veniam', 'quis', 'nostrud',
+      'exercitation', 'ullamco', 'laboris', 'nisi', 'aliquip', 'ex', 'ea', 'commodo',
+      'consequat', 'Duis', 'aute', 'irure', 'in', 'reprehenderit', 'voluptate',
+      'velit', 'esse', 'cillum', 'fugiat', 'nulla', 'pariatur', 'Excepteur', 'sint',
+      'occaecat', 'cupidatat', 'non', 'proident', 'sunt', 'culpa', 'qui', 'officia',
+      'deserunt', 'mollit', 'anim', 'id', 'est', 'laborum'
+    ];
+    
+    // Generate text with similar length to original
+    const targetLength = Math.min(originalText.length, maxLength);
+    let result = '';
+    let wordIndex = 0;
+    
+    while (result.length < targetLength) {
+      if (result.length > 0) result += ' ';
+      result += loremWords[wordIndex % loremWords.length];
+      wordIndex++;
+    }
+    
+    // Trim to target length if necessary
+    if (result.length > targetLength) {
+      result = result.substring(0, targetLength - 3) + '...';
+    }
+    
+    return result;
   }
 
   expandConfidenceDetails(result, element) {
@@ -1393,7 +1490,8 @@ class CommisionsfinderPopup {
 
     // Display name component (always show if present)
     if (components.displayName || result.displayName) {
-        const displayNameText = result.displayName || '';
+        const originalDisplayName = result.displayName || '';
+        const displayNameText = this.settings.demoMode ? this.getDemoDisplayName(originalDisplayName) : originalDisplayName;
         // Show raw confidence for individual components (how confident we are in this determination)
         const confidence = this.getRawConfidencePercent(components.displayName?.confidence);
         const confidenceClass = confidence >= 70 ? 'high' : 
@@ -1415,7 +1513,7 @@ class CommisionsfinderPopup {
 
     // Bio component
     if (components.bio) {
-        const bioText = result.bio || '';
+        const bioText = this.settings.demoMode ? this.getDemoLoremText(result.bio || '', 200) : (result.bio || '');
         // Show raw confidence for individual components
         const confidence = this.getRawConfidencePercent(components.bio.confidence);
         const confidenceClass = confidence >= 70 ? 'high' : 
@@ -1507,9 +1605,11 @@ class CommisionsfinderPopup {
                                 (item.title.length > 25 ? item.title.substring(0, 22) + '...' : item.title) : 
                                 'Untitled';
                             
+                            const demoTitle = this.settings.demoMode ? this.getDemoLoremText(item.title || 'Untitled', 25) : shortTitle;
+                            
                             return `
                                 <a href="${item.url}" class="gallery-item" target="_blank" rel="noopener noreferrer">
-                                    <span class="gallery-item-title">${shortTitle}</span>
+                                    <span class="gallery-item-title">${demoTitle}</span>
                                     <span class="gallery-item-status ${this.getStatusClass(item.commissionStatus)}">
                                         ${this.getStatusLabel(item.commissionStatus).replace('✅ ', '').replace('❌ ', '').replace('❓ ', '')}
                                     </span>
@@ -1555,9 +1655,11 @@ class CommisionsfinderPopup {
                                 'No text';
                             const pinnedIndicator = post.isPinned ? '📌 ' : '';
                             
+                            const demoText = this.settings.demoMode ? this.getDemoLoremText(post.text || 'No text', 30) : shortText;
+                            
                             return `
                                 <a href="${post.url}" class="gallery-item" target="_blank" rel="noopener noreferrer">
-                                    <span class="gallery-item-title">${pinnedIndicator}${shortText}</span>
+                                    <span class="gallery-item-title">${pinnedIndicator}${demoText}</span>
                                     <span class="gallery-item-status ${this.getStatusClass(post.commissionStatus)}">
                                         ${this.getStatusLabel(post.commissionStatus).replace('✅ ', '').replace('❌ ', '').replace('❓ ', '')}
                                     </span>
@@ -1682,7 +1784,8 @@ class CommisionsfinderPopup {
           if (progressData.subTask && progressData.subProgress) {
             subTaskInfo = ` - ${progressData.subTask} (${progressData.subProgress}%)`;
           }
-          statusText = `${platform}: Scanning ${progressData.currentArtist} (${progressData.completed}/${progressData.total})`;
+          const artistName = this.settings.demoMode ? this.getDemoDisplayName(progressData.currentArtist) : progressData.currentArtist;
+          statusText = `${platform}: Scanning ${artistName} (${progressData.completed}/${progressData.total})`;
           if (subTaskInfo) {
             statusText += `\n${subTaskInfo}`;
           }
@@ -2269,6 +2372,23 @@ getSpeedClass(samplesPerSecond) {
     }
   }
   
+  async updateDemoMode() {
+    this.settings.demoMode = this.demoMode.checked;
+    
+    try {
+      await chrome.storage.local.set({
+        demoMode: this.settings.demoMode
+      });
+      
+      // Re-render results to apply demo mode changes
+      this.displayResults();
+      this.showSuccess(`Demo mode ${this.settings.demoMode ? 'enabled' : 'disabled'}`);
+    } catch (error) {
+      console.error('Error updating demo mode:', error);
+      this.showError('Failed to update demo mode');
+    }
+  }
+  
   toggleZenMode(enabled) {
     // Hide/show promo section
     if (this.commsClassifierPromo) {
@@ -2351,6 +2471,59 @@ getSpeedClass(samplesPerSecond) {
     } catch (error) {
       console.error('Error hiding feedback for 3 days:', error);
       this.showError('Failed to hide feedback section');
+    }
+  }
+
+  async checkDisclaimerAcknowledgment() {
+    try {
+      const result = await chrome.storage.local.get(['disclaimerAcknowledged']);
+      if (!result.disclaimerAcknowledged) {
+        this.showDisclaimer();
+      }
+    } catch (error) {
+      console.error('Error checking disclaimer acknowledgment:', error);
+      // If there's an error checking, show the disclaimer to be safe
+      this.showDisclaimer();
+    }
+  }
+
+  showDisclaimer() {
+    if (this.disclaimerOverlay) {
+      document.body.classList.add('disclaimer-active');
+      this.disclaimerOverlay.style.display = 'flex';
+      this.showDisclaimerPage1();
+    }
+  }
+
+  hideDisclaimer() {
+    if (this.disclaimerOverlay) {
+      document.body.classList.remove('disclaimer-active');
+      this.disclaimerOverlay.style.display = 'none';
+    }
+  }
+
+  showDisclaimerPage1() {
+    if (this.disclaimerPage1 && this.disclaimerPage2) {
+      this.disclaimerPage1.style.display = 'block';
+      this.disclaimerPage2.style.display = 'none';
+    }
+  }
+
+  showDisclaimerPage2() {
+    if (this.disclaimerPage1 && this.disclaimerPage2) {
+      this.disclaimerPage1.style.display = 'none';
+      this.disclaimerPage2.style.display = 'block';
+    }
+  }
+
+  async acceptDisclaimer() {
+    try {
+      await chrome.storage.local.set({ disclaimerAcknowledged: true });
+      this.hideDisclaimer();
+      this.showSuccess('Welcome to Commsfinder!');
+    } catch (error) {
+      console.error('Error saving disclaimer acknowledgment:', error);
+      this.showError('Failed to save acknowledgment');
     }
   }
 }

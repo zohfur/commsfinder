@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Commsfinder",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Find artists with open commissions across multiple platforms",
   "permissions": [
     "scripting",
@@ -25,7 +25,6 @@
   },
   
   "action": {
-    "default_popup": "popup/popup.html",
     "default_title": "Find Open Commissions",
     "default_icon": {
       "16": "icons/icon16.png",

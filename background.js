@@ -844,7 +844,7 @@ async function handleStopScan(sendResponse) {
           progressData[platform] = platformProgress;
         }
       } catch (error) {
-        console.warn(`Failed to get progress for ${platform}:`, error);
+        console.warn(`Failed to get progress for ${platform} in tab ${tabId}:`, error);
       }
     }
     
@@ -1519,6 +1519,33 @@ async function handleTemperatureUpdate(temperature, sendResponse) {
   }
 }
 
+// Handle opening extension in a separate window
+async function handleOpenInWindow(sendResponse) {
+  try {
+    // Create a new popup window with the extension (twice the popup size)
+    const window = await chrome.windows.create({
+      url: chrome.runtime.getURL('popup/popup.html'),
+      type: 'popup',
+      width: 500,
+      height: 900,
+      focused: true
+    });
+    
+    if (isDebugMode) {
+      console.log('[Background] Created window with ID:', window.id);
+    }
+    
+    if (sendResponse) {
+      sendResponse({ success: true, windowId: window.id });
+    }
+  } catch (error) {
+    console.error('[Background] Error creating window:', error);
+    if (sendResponse) {
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+}
+
 // Load the selected quantization at startup
 async function initializeSelectedQuantization() {
   try {
@@ -1534,6 +1561,16 @@ async function initializeSelectedQuantization() {
 
 // Initialize quantization on startup
 initializeSelectedQuantization();
+
+// Handle extension icon click - open in window instead of popup
+chrome.action.onClicked.addListener(async (tab) => {
+  if (isDebugMode) {
+    console.log('[Background] Extension icon clicked, opening window');
+  }
+  
+  // Open the extension in a window
+  await handleOpenInWindow();
+});
 
 // Initialize debug mode when extension starts
 initDebugMode();

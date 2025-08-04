@@ -298,7 +298,7 @@ export async function downloadAndCacheModel(progressCallback, quantizationType =
             headers: {
               'Accept': '*/*',
               'Cache-Control': 'no-cache',
-              'User-Agent': 'CommsFinder-Extension/1.0.3'
+              'User-Agent': 'CommsFinder-Extension/1.0.4'
             }
           });
           break; // Success, exit retry loop
