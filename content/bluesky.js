@@ -531,7 +531,7 @@ async function fetchPinnedPost(postUri) {
             return null;
         }
         
-        const [, did, rkey] = uriParts;
+        const [, , rkey] = uriParts;
         
         // Fetch the post using getPostThread
         const response = await fetch(`${CONFIG.API_BASE}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(postUri)}`);

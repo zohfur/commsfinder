@@ -746,7 +746,7 @@ async function initializeScan(platforms) {
         await scanPlatform(
           platform === 'furaffinity' ? 'https://www.furaffinity.net/controls/favorites/' :
           platform === 'twitter' ? 'https://twitter.com/following' :
-          platform === 'bluesky' ? 'https://bsky.app/profile' : '',
+          platform === 'bluesky' ? 'https://bsky.app' : '',
           platform,
           platformProgress
         );

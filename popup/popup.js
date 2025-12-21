@@ -308,7 +308,7 @@ class CommisionsfinderPopup {
       if (result.roadmapMinimized !== undefined && result.roadmapMinimized) {
         this.roadmapSection.classList.add('minimized');
         const toggleIcon = this.roadmapToggleBtn.querySelector('.toggle-icon');
-        toggleIcon.textContent = '❯';
+        toggleIcon.textContent = '❯❯';
         this.roadmapToggleBtn.title = 'Expand Roadmap';
       }
 
@@ -443,45 +443,55 @@ class CommisionsfinderPopup {
     }
   }
   
-  updatePlatformSettings() {
+  async updatePlatformSettings() {
     this.settings.platforms = {
       furaffinity: this.platformFuraffinity.checked,
       bluesky: this.platformBluesky.checked,
       twitter: false // Twitter is disabled, always set to false
     };
     
-    chrome.storage.local.set({ platforms: this.settings.platforms });
+    try {
+      await chrome.storage.local.set({ platforms: this.settings.platforms });
+    } catch (error) {
+      console.error('Error saving platform settings:', error);
+      this.showError('Failed to save platform settings');
+    }
   }
   
-  updateSettings() {
+  async updateSettings() {
     this.settings.aiEnabled = this.aiEnabled.checked;
     
-    chrome.storage.local.set({
-      aiEnabled: this.settings.aiEnabled
-    });
-    
-    // Show/hide model selection based on AI enabled status
-    const modelSelectionGroup = document.getElementById('modelSelectionGroup');
-    if (modelSelectionGroup) {
-      modelSelectionGroup.style.display = this.settings.aiEnabled ? 'block' : 'none';
+    try {
+      await chrome.storage.local.set({
+        aiEnabled: this.settings.aiEnabled
+      });
+      
+      // Show/hide model selection based on AI enabled status
+      const modelSelectionGroup = document.getElementById('modelSelectionGroup');
+      if (modelSelectionGroup) {
+        modelSelectionGroup.style.display = this.settings.aiEnabled ? 'block' : 'none';
+      }
+      
+      // Re-apply filters in case the mode affects results
+      this.applyFilters();
+      
+      // Update model status when AI is toggled
+      this.checkModelStatus();
+    } catch (error) {
+      console.error('Error saving AI enabled setting:', error);
+      this.showError('Failed to save setting');
     }
-    
-    // Re-apply filters in case the mode affects results
-    this.applyFilters();
-    
-    // Update model status when AI is toggled
-    this.checkModelStatus();
   }
 
   async updateModelSettings() {
     this.settings.selectedQuantization = this.modelSelector.value;
     
-    chrome.storage.local.set({
-      selectedQuantization: this.settings.selectedQuantization
-    });
-    
-    // Clear any existing model cache and update status
     try {
+      await chrome.storage.local.set({
+        selectedQuantization: this.settings.selectedQuantization
+      });
+      
+      // Clear any existing model cache and update status
       await chrome.runtime.sendMessage({
         type: 'MODEL_CHANGED',
         modelName: this.settings.selectedQuantization
@@ -1989,7 +1999,7 @@ class CommisionsfinderPopup {
     this.settingsModal.style.display = 'none';
   }
 
-  toggleRoadmap() {
+  async toggleRoadmap() {
     const isMinimized = this.roadmapSection.classList.contains('minimized');
     const toggleIcon = this.roadmapToggleBtn.querySelector('.toggle-icon');
     
@@ -2006,9 +2016,13 @@ class CommisionsfinderPopup {
     }
 
     // Save the state to storage
-    chrome.storage.local.set({
-      roadmapMinimized: !isMinimized
-    });
+    try {
+      await chrome.storage.local.set({
+        roadmapMinimized: !isMinimized
+      });
+    } catch (error) {
+      console.error('Error saving roadmap state:', error);
+    }
   }
   
   async clearAllData() {
