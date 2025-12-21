@@ -12,6 +12,10 @@ class CommisionsfinderPopup {
     this.searchInstance = null; // Fuse.js instance
     this.debugSearch = false; // Enable search debugging (toggle with window.popup.toggleSearchDebug())
     this.searchDebounceTimer = null; // For debounced search
+    this.promoHiddenForever = false; // Cache for promo hide forever preference
+    this.promoHiddenUntil = null; // Cache for promo hide until timestamp
+    this.feedbackHiddenForever = false; // Cache for feedback hide forever preference
+    this.feedbackHiddenUntil = null; // Cache for feedback hide until timestamp
     this.settings = {
       aiEnabled: true,  // AI enabled by default since no-AI mode is still in development
       selectedQuantization: 'full',
@@ -27,12 +31,50 @@ class CommisionsfinderPopup {
     
     this.initializeElements();
     this.bindEvents();
-    this.loadSettings();
-    this.loadResults();
+    // Check disclaimer status immediately to prevent flash (don't await, fire and forget)
+    // Disclaimer is hidden by default in CSS, so no flash occurs
+    this.checkDisclaimerAcknowledgmentQuick();
+    // Initialize async operations
+    this.initializeAsync();
+  }
+  
+  async checkDisclaimerAcknowledgmentQuick() {
+    // Quick async check - disclaimer is hidden by default in CSS, so no flash
+    // This runs immediately without blocking to show disclaimer ASAP if needed
+    try {
+      const result = await chrome.storage.local.get(['disclaimerAcknowledged']);
+      if (result.disclaimerAcknowledged !== true) {
+        // Not acknowledged, show it immediately
+        if (this.disclaimerOverlay) {
+          this.disclaimerOverlay.style.display = 'flex';
+        }
+      }
+      // If acknowledged, it stays hidden (hidden by default in CSS)
+    } catch (error) {
+      console.error('[Commsfinder] Error in quick disclaimer check:', error);
+      // On error, show disclaimer to be safe
+      if (this.disclaimerOverlay) {
+        this.disclaimerOverlay.style.display = 'flex';
+      }
+    }
+  }
+  
+  async initializeAsync() {
+    // Load settings first
+    await this.loadSettings();
+    
+    // Then load other data in parallel
+    await Promise.all([
+      this.loadResults(),
+      this.loadFavoritesAndBlacklist()
+    ]);
+    
+    // Check model status and benchmark availability (non-blocking)
     this.checkModelStatus();
     this.checkBenchmarkAvailability();
-    this.loadFavoritesAndBlacklist();
-    this.checkDisclaimerAcknowledgment();
+    
+    // Do a final async check to ensure disclaimer state is correct (redundant but safe)
+    await this.checkDisclaimerAcknowledgment();
   }
   
   initializeElements() {
@@ -312,16 +354,20 @@ class CommisionsfinderPopup {
         this.roadmapToggleBtn.title = 'Expand Roadmap';
       }
 
-      // Check promo hiding preferences
+      // Check promo hiding preferences and cache them
       const now = Date.now();
-      if (result.promoHiddenForever || (result.promoHiddenUntil && now < result.promoHiddenUntil)) {
+      this.promoHiddenForever = result.promoHiddenForever === true;
+      this.promoHiddenUntil = result.promoHiddenUntil && now < result.promoHiddenUntil ? result.promoHiddenUntil : null;
+      if (this.promoHiddenForever || this.promoHiddenUntil) {
         if (this.commsClassifierPromo) {
           this.commsClassifierPromo.style.display = 'none';
         }
       }
 
-      // Check feedback hiding preferences
-      if (result.feedbackHiddenForever || (result.feedbackHiddenUntil && now < result.feedbackHiddenUntil)) {
+      // Check feedback hiding preferences and cache them
+      this.feedbackHiddenForever = result.feedbackHiddenForever === true;
+      this.feedbackHiddenUntil = result.feedbackHiddenUntil && now < result.feedbackHiddenUntil ? result.feedbackHiddenUntil : null;
+      if (this.feedbackHiddenForever || this.feedbackHiddenUntil) {
         if (this.feedbackSection) {
           this.feedbackSection.style.display = 'none';
         }
@@ -1907,13 +1953,14 @@ class CommisionsfinderPopup {
       this.applyFilters(); // This will call displayResults() which handles empty filtered lists
       
       // Show the CommsClassifier promo, roadmap, and feedback after a successful scan
-      if (this.commsClassifierPromo) {
+      // But respect "Hide Forever" and "Hide for 3 days" preferences
+      if (this.commsClassifierPromo && !this.isPromoHidden()) {
         this.commsClassifierPromo.style.display = 'block';
       }
       if (this.roadmapSection) {
         this.roadmapSection.style.display = 'block';
       }
-      if (this.feedbackSection) {
+      if (this.feedbackSection && !this.isFeedbackHidden()) {
         this.feedbackSection.style.display = 'block';
       }
     } else {
@@ -2403,10 +2450,27 @@ getSpeedClass(samplesPerSecond) {
     }
   }
   
+  // Helper methods to check if sections should be hidden
+  isPromoHidden() {
+    if (this.promoHiddenForever) return true;
+    if (this.promoHiddenUntil && Date.now() < this.promoHiddenUntil) return true;
+    return false;
+  }
+  
+  isFeedbackHidden() {
+    if (this.feedbackHiddenForever) return true;
+    if (this.feedbackHiddenUntil && Date.now() < this.feedbackHiddenUntil) return true;
+    return false;
+  }
+  
   toggleZenMode(enabled) {
-    // Hide/show promo section
+    // Hide/show promo section (but respect "Hide Forever" and "Hide for 3 days" preferences)
     if (this.commsClassifierPromo) {
-      this.commsClassifierPromo.style.display = enabled ? 'none' : '';
+      if (enabled || this.isPromoHidden()) {
+        this.commsClassifierPromo.style.display = 'none';
+      } else {
+        this.commsClassifierPromo.style.display = '';
+      }
     }
     
     // Hide/show roadmap section
@@ -2414,9 +2478,13 @@ getSpeedClass(samplesPerSecond) {
       this.roadmapSection.style.display = enabled ? 'none' : '';
     }
     
-    // Hide/show feedback section
+    // Hide/show feedback section (but respect "Hide Forever" and "Hide for 3 days" preferences)
     if (this.feedbackSection) {
-      this.feedbackSection.style.display = enabled ? 'none' : '';
+      if (enabled || this.isFeedbackHidden()) {
+        this.feedbackSection.style.display = 'none';
+      } else {
+        this.feedbackSection.style.display = '';
+      }
     }
   }
 
@@ -2430,6 +2498,7 @@ getSpeedClass(samplesPerSecond) {
   async hidePromoForever() {
     try {
       await chrome.storage.local.set({ promoHiddenForever: true });
+      this.promoHiddenForever = true; // Update cache
       if (this.commsClassifierPromo) {
         this.commsClassifierPromo.style.display = 'none';
       }
@@ -2444,6 +2513,7 @@ getSpeedClass(samplesPerSecond) {
     try {
       const hiddenUntil = Date.now() + (3 * 24 * 60 * 60 * 1000); // 3 days from now
       await chrome.storage.local.set({ promoHiddenUntil: hiddenUntil });
+      this.promoHiddenUntil = hiddenUntil; // Update cache
       if (this.commsClassifierPromo) {
         this.commsClassifierPromo.style.display = 'none';
       }
@@ -2464,6 +2534,7 @@ getSpeedClass(samplesPerSecond) {
   async hideFeedbackForever() {
     try {
       await chrome.storage.local.set({ feedbackHiddenForever: true });
+      this.feedbackHiddenForever = true; // Update cache
       if (this.feedbackSection) {
         this.feedbackSection.style.display = 'none';
       }
@@ -2478,6 +2549,7 @@ getSpeedClass(samplesPerSecond) {
     try {
       const hiddenUntil = Date.now() + (3 * 24 * 60 * 60 * 1000); // 3 days from now
       await chrome.storage.local.set({ feedbackHiddenUntil: hiddenUntil });
+      this.feedbackHiddenUntil = hiddenUntil; // Update cache
       if (this.feedbackSection) {
         this.feedbackSection.style.display = 'none';
       }
@@ -2491,11 +2563,18 @@ getSpeedClass(samplesPerSecond) {
   async checkDisclaimerAcknowledgment() {
     try {
       const result = await chrome.storage.local.get(['disclaimerAcknowledged']);
-      if (!result.disclaimerAcknowledged) {
+      console.log('[Commsfinder] Disclaimer acknowledgment check:', result);
+      
+      // Check if disclaimerAcknowledged is explicitly true
+      if (result.disclaimerAcknowledged === true) {
+        console.log('[Commsfinder] Disclaimer already acknowledged, hiding disclaimer');
+        this.hideDisclaimer();
+      } else {
+        console.log('[Commsfinder] Disclaimer not acknowledged, showing disclaimer');
         this.showDisclaimer();
       }
     } catch (error) {
-      console.error('Error checking disclaimer acknowledgment:', error);
+      console.error('[Commsfinder] Error checking disclaimer acknowledgment:', error);
       // If there's an error checking, show the disclaimer to be safe
       this.showDisclaimer();
     }
@@ -2532,12 +2611,25 @@ getSpeedClass(samplesPerSecond) {
 
   async acceptDisclaimer() {
     try {
+      console.log('[Commsfinder] Saving disclaimer acknowledgment...');
+      
+      // Save the acknowledgment
       await chrome.storage.local.set({ disclaimerAcknowledged: true });
-      this.hideDisclaimer();
-      this.showSuccess('Welcome to Commsfinder!');
+      
+      // Verify it was saved by reading it back
+      const verification = await chrome.storage.local.get(['disclaimerAcknowledged']);
+      if (verification.disclaimerAcknowledged === true) {
+        console.log('[Commsfinder] Disclaimer acknowledgment saved successfully');
+        this.hideDisclaimer();
+        this.showSuccess('Welcome to Commsfinder!');
+      } else {
+        console.error('[Commsfinder] Disclaimer acknowledgment verification failed');
+        throw new Error('Verification failed: disclaimer acknowledgment was not saved');
+      }
     } catch (error) {
-      console.error('Error saving disclaimer acknowledgment:', error);
-      this.showError('Failed to save acknowledgment');
+      console.error('[Commsfinder] Error saving disclaimer acknowledgment:', error);
+      this.showError('Failed to save acknowledgment. Please try again.');
+      // Don't hide the disclaimer if save failed
     }
   }
 }
