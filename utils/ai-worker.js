@@ -26,7 +26,7 @@ self.addEventListener('message', async (event) => {
                 const analyzerOptions = {
                     ...options,
                     model: 'zohfur/distilbert-commissions-ONNX',
-                    quantization: options.quantization || 'quantized'
+                    quantization: options.quantization || 'fp16'
                 };
                 analyzer = new AIAnalyzer(analyzerOptions);
                 

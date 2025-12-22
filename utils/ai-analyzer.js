@@ -16,13 +16,15 @@ env.useBrowserCache = true;
 // the Content Security Policy of Manifest V3 extensions. The wasm compilation will
 // happen in our own worker, which is fine.
 env.backends.onnx.wasm = {
-  // Enable multithreading with 4 threads (0 means use all available cores)
-  numThreads: 1,
+  // Try to use more threads for better performance (if supported)
+  // Note: In service workers, this may be limited, but worth trying
+  numThreads: navigator.hardwareConcurrency ? Math.min(4, navigator.hardwareConcurrency) : 2,
   // Disable proxy worker since it's not compatible with Chrome extension CSP
   proxy: false,
   // Set paths relative to the worker's location in /dist/utils/
   wasmPaths: '../onnxruntime-web/',
-
+  // Enable SIMD for faster computation
+  simd: true
 };
 
 // The primary class for performing AI analysis.
@@ -31,12 +33,15 @@ export class AIAnalyzer {
 
     constructor(options = {}) {
         this.model = 'zohfur/distilbert-commissions-ONNX';
-        this.quantization = options.quantization || 'quantized';
+        this.quantization = options.quantization || 'fp16';
         this.modelName = null;
         this.modelConfig = null;
         this.modelTemperature = options.temperature || 1.0;
         this.debugMode = false;
         this.pipeline = null;
+        // Cache for analysis results to avoid re-analyzing identical text
+        this.analysisCache = new Map();
+        this.maxCacheSize = 100; // Limit cache size to prevent memory issues
         this.initialize();
     }
     
@@ -94,7 +99,31 @@ export class AIAnalyzer {
                 throw new Error('Model not initialized. Call initialize() before analyzing.');
             }
 
-                return await this.analyzeWithClassification(text);
+            // Truncate very long text to improve performance
+            // DistilBERT has a max length of 512 tokens, but we'll limit to ~400 chars for safety
+            const MAX_TEXT_LENGTH = 400;
+            const truncatedText = text && text.length > MAX_TEXT_LENGTH 
+                ? text.substring(0, MAX_TEXT_LENGTH) + '...'
+                : text;
+
+            // Check cache first (use text as key since context doesn't affect classification)
+            const cacheKey = truncatedText;
+            if (this.analysisCache.has(cacheKey)) {
+                debugLog('[AIAnalyzer] Cache hit for text');
+                return this.analysisCache.get(cacheKey);
+            }
+
+            const result = await this.analyzeWithClassification(truncatedText);
+            
+            // Cache the result (with size limit)
+            if (this.analysisCache.size >= this.maxCacheSize) {
+                // Remove oldest entry (simple FIFO)
+                const firstKey = this.analysisCache.keys().next().value;
+                this.analysisCache.delete(firstKey);
+            }
+            this.analysisCache.set(cacheKey, result);
+
+            return result;
 
         } catch (error) {
             console.error('Analysis error:', error);
@@ -449,6 +478,10 @@ export class AIAnalyzer {
         let weightedScore = 0;
         let highestConfidence = 0;
         let hasSilverBullet = false;
+        
+        // Early exit threshold: if we get a very high confidence result, we can skip remaining analysis
+        const EARLY_EXIT_CONFIDENCE = 0.95;
+        const EARLY_EXIT_MIN_WEIGHT = 0.5; // Need at least this much weight before early exit
 
         // Analyze display name (base weight: 0.3)
         if (components.displayName) {
@@ -506,6 +539,16 @@ export class AIAnalyzer {
             totalWeight += bioWeight;
             highestConfidence = Math.max(highestConfidence, results.bio.confidence);
             debugLog('[AIAnalyzer] Bio analysis result:', results.bio);
+            
+            // Early exit: if bio gives us very high confidence, skip remaining analysis
+            if (results.bio.confidence >= EARLY_EXIT_CONFIDENCE && totalWeight >= EARLY_EXIT_MIN_WEIGHT) {
+                debugLog('[AIAnalyzer] Early exit: High confidence bio result');
+                // Skip remaining components
+                components.commissionStatus = null;
+                components.journal = null;
+                components.galleryItems = null;
+                components.posts = null;
+            }
         }
 
         // Analyze commission status (base weight: 0.2)
@@ -626,8 +669,19 @@ export class AIAnalyzer {
             let totalPostWeight = 0; // Track total weight for proper normalization
             let hasPinnedPost = false;
 
-            // Analyze each post
-            for (const post of components.posts) {
+            // Limit number of posts analyzed for performance (prioritize pinned and recent)
+            const MAX_POSTS_TO_ANALYZE = 3; // Reduced from analyzing all posts
+            const postsToAnalyze = components.posts
+                .sort((a, b) => {
+                    // Prioritize pinned posts first, then by date (most recent first)
+                    if (a.isPinned && !b.isPinned) return -1;
+                    if (!a.isPinned && b.isPinned) return 1;
+                    return new Date(b.date || 0) - new Date(a.date || 0);
+                })
+                .slice(0, MAX_POSTS_TO_ANALYZE);
+
+            // Analyze each post (limited set)
+            for (const post of postsToAnalyze) {
                 const postResult = await this.analyzePost(post);
                 // console.log('[AIAnalyzer] Post analysis result:', postResult);
                 if (postResult) {

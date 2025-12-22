@@ -14,9 +14,9 @@ const QUANTIZATIONS = {
     description: 'Highest accuracy, largest size'
   },
   'fp16': {
-    name: 'High accuracy (FP16)',
+    name: 'High accuracy (FP16) - Faster',
     onnxFile: 'onnx/model_fp16.onnx',
-    description: 'Half precision, good balance'
+    description: 'Half precision, good balance - Faster than INT8'
   },
   'quantized': {
     name: 'Quantized INT8 (67.5 MB)',
@@ -34,9 +34,9 @@ const QUANTIZATIONS = {
     description: 'Unsigned integer quantization'
   },
   'q4f16': {
-    name: 'Q4F16 (73 MB)',
+    name: 'Q4F16 (73 MB) - Faster',
     onnxFile: 'onnx/model_q4f16.onnx',
-    description: '4-bit weights with FP16 activations'
+    description: '4-bit weights with FP16 activations - Faster inference'
   },
   'bnb4': {
     name: 'BNB4 (122 MB)',
@@ -50,8 +50,8 @@ const QUANTIZATIONS = {
   }
 };
 
-// Current quantization (default to quantized for good balance)
-let currentQuantization = 'quantized';
+// Current quantization (default to fp16 for better performance)
+let currentQuantization = 'fp16';
 
 /**
  * Sets the current quantization to use

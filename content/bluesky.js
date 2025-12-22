@@ -604,12 +604,28 @@ async function fetchPinnedPost(postUri) {
 function formatDataForAnalysis(artistData) {
     console.log('[Bluesky] Formatting artist data for analysis:', artistData);
     
-    const formatted = {
-        displayName: artistData.displayName || '',
-        bio: artistData.bio || '',
-        commissionStatus: '', // Bluesky doesn't have explicit commission status
-        posts: artistData.posts ? artistData.posts.map(post => ({
-            text: post.text || '',
+    // Truncate bio if too long (performance optimization)
+    const MAX_BIO_LENGTH = 500;
+    const bio = artistData.bio || '';
+    const truncatedBio = bio.length > MAX_BIO_LENGTH 
+        ? bio.substring(0, MAX_BIO_LENGTH) + '...'
+        : bio;
+    
+    // Limit posts to most relevant ones (already limited in getUserProfileAndPosts, but ensure here too)
+    const MAX_POSTS = 3;
+    const posts = artistData.posts ? artistData.posts
+        .sort((a, b) => {
+            // Prioritize pinned posts, then by engagement, then by date
+            if (a === artistData.pinnedPost) return -1;
+            if (b === artistData.pinnedPost) return 1;
+            const aEngagement = (a.likeCount || 0) + (a.repostCount || 0) + (a.replyCount || 0);
+            const bEngagement = (b.likeCount || 0) + (b.repostCount || 0) + (b.replyCount || 0);
+            if (aEngagement !== bEngagement) return bEngagement - aEngagement;
+            return (b.timestamp || 0) - (a.timestamp || 0);
+        })
+        .slice(0, MAX_POSTS)
+        .map(post => ({
+            text: (post.text || '').substring(0, 300), // Truncate post text too
             date: post.timestamp,
             url: post.url || '',
             isPinned: post === artistData.pinnedPost,
@@ -618,7 +634,13 @@ function formatDataForAnalysis(artistData) {
                 reposts: post.repostCount,
                 replies: post.replyCount
             }
-        })) : []
+        })) : [];
+    
+    const formatted = {
+        displayName: artistData.displayName || '',
+        bio: truncatedBio,
+        commissionStatus: '', // Bluesky doesn't have explicit commission status
+        posts: posts
     };
     
     console.log('[Bluesky] Formatted data:', formatted);
