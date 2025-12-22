@@ -2,6 +2,9 @@
 
 console.log('CommsFinder: Bluesky content script loaded');
 
+// Import performance benchmark
+import { getBenchmark, enableBenchmark } from '../utils/performance-benchmark.js';
+
 // Create progress overlay
 function createProgressOverlay() {
     const overlay = document.createElement('div');
@@ -373,6 +376,8 @@ async function getFollowingList(userDid) {
 
 // Get detailed profile and posts for a user
 async function getUserProfileAndPosts(userDid, userHandle) {
+    const benchmark = getBenchmark('bluesky');
+    
     for (let retry = 0; retry < CONFIG.MAX_RETRIES; retry++) {
         try {
             console.log(`[Bluesky] Fetching profile and posts for: ${userHandle}`);
@@ -383,9 +388,11 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 subProgress: 10
             });
 
+            benchmark.startStep('Fetching profile');
             // Get profile
             const profileResponse = await fetch(`${CONFIG.API_BASE}/app.bsky.actor.getProfile?actor=${userDid}`);
             if (!profileResponse.ok) {
+                benchmark.endStep();
                 if (profileResponse.status === 429) {
                     await errorDelay();
                     continue;
@@ -394,6 +401,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
             }
             
             const profile = await profileResponse.json();
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: userHandle,
@@ -401,9 +409,11 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 subProgress: 30
             });
 
+            benchmark.startStep('Fetching posts');
             // Get recent posts
             const postsResponse = await fetch(`${CONFIG.API_BASE}/app.bsky.feed.getAuthorFeed?actor=${userDid}&limit=${CONFIG.MAX_POSTS_PER_USER}`);
             if (!postsResponse.ok) {
+                benchmark.endStep();
                 if (postsResponse.status === 429) {
                     await errorDelay();
                     continue;
@@ -412,6 +422,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
             }
             
             const postsData = await postsResponse.json();
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: userHandle,
@@ -419,9 +430,11 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 subProgress: 60
             });
 
+            benchmark.startStep('Processing posts');
             // Process posts to extract relevant data
             let processedPosts = processPosts(postsData.feed || []);
             let pinnedPost = null;
+            benchmark.endStep();
 
             // Fetch pinned post if it exists
             if (profile.pinnedPost) {
@@ -432,7 +445,10 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                     subProgress: 70
                 });
 
+                benchmark.startStep('Fetching pinned post');
                 pinnedPost = await fetchPinnedPost(profile.pinnedPost.uri);
+                benchmark.endStep();
+                
                 if (pinnedPost) {
                     pinnedPost.isPinned = true;
                     
@@ -450,8 +466,10 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 subProgress: 80
             });
             
+            benchmark.startStep('Formatting data for analysis');
             // Get most recent non-pinned post
             const recentPost = processedPosts.find(post => !post.isPinned) || null;
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: userHandle,
@@ -459,6 +477,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 subProgress: 95
             });
 
+            benchmark.startStep('Finalizing artist data');
             const artistData = {
                 username: userHandle,
                 displayName: profile.displayName || userHandle,
@@ -474,11 +493,15 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 posts: processedPosts,
                 lastUpdated: Date.now()
             };
+            benchmark.endStep();
             
             console.log(`[Bluesky] Processed user data for: ${userHandle}`, artistData);
             return artistData;
             
         } catch (error) {
+            if (benchmark && benchmark.currentStep) {
+                benchmark.endStep();
+            }
             console.error(`[Bluesky] Error getting user data for ${userHandle} (attempt ${retry + 1}):`, error);
             progress.update({ errors: progress.errors + 1 });
             
@@ -606,6 +629,10 @@ function formatDataForAnalysis(artistData) {
 async function scanBluesky(existingProgress = null) {
     console.log('[Bluesky] Starting Bluesky scan...', existingProgress ? 'Resuming from saved progress' : 'Fresh scan');
     
+    // Enable benchmarking
+    const benchmark = enableBenchmark('bluesky');
+    benchmark.reset();
+    
     createProgressOverlay();
     updateProgressOverlay('show');
     
@@ -686,7 +713,14 @@ async function scanBluesky(existingProgress = null) {
                 console.log('[Bluesky] Sending analysis request:', analysisRequest);
 
                 try {
+                    if (benchmark) {
+                        benchmark.startStep('Analyzing content');
+                    }
                     const result = await sendAnalysisRequestWithRetry(analysisRequest, artistData);
+                    if (benchmark) {
+                        benchmark.endStep();
+                    }
+                    
                     if (result) {
                         console.log('[Bluesky] Final artist result:', result);
                         
@@ -701,6 +735,9 @@ async function scanBluesky(existingProgress = null) {
                         }
                     }
                 } catch (error) {
+                    if (benchmark && benchmark.currentStep) {
+                        benchmark.endStep();
+                    }
                     console.error('[Bluesky] Analysis failed after retries:', error);
                     // Continue with next artist instead of failing completely
                 }
@@ -716,6 +753,22 @@ async function scanBluesky(existingProgress = null) {
             total: following.length
         });
         
+        // Send benchmark results
+        if (benchmark) {
+            const benchmarkResults = benchmark.getResults();
+            if (benchmarkResults) {
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'BENCHMARK_RESULTS',
+                        platform: 'bluesky',
+                        results: benchmarkResults
+                    }).catch(() => {});
+                } catch (e) {
+                    console.warn('[Bluesky] Failed to send benchmark results:', e);
+                }
+            }
+        }
+        
         if (isExtensionContextValid()) {
             chrome.runtime.sendMessage({
                 type: 'SCAN_COMPLETE',
@@ -729,6 +782,23 @@ async function scanBluesky(existingProgress = null) {
     } catch (error) {
         console.error('[Bluesky] Scan error:', error);
         updateProgressOverlay('error', { error: error.message });
+        
+        // Send benchmark results even on error
+        if (benchmark) {
+            const benchmarkResults = benchmark.getResults();
+            if (benchmarkResults) {
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'BENCHMARK_RESULTS',
+                        platform: 'bluesky',
+                        results: benchmarkResults
+                    }).catch(() => {});
+                } catch (e) {
+                    console.warn('[Bluesky] Failed to send benchmark results on error:', e);
+                }
+            }
+        }
+        
         if (isExtensionContextValid()) {
             chrome.runtime.sendMessage({
                 type: 'SCAN_ERROR',
@@ -737,6 +807,25 @@ async function scanBluesky(existingProgress = null) {
             }).catch(error => {
                 console.warn('[Bluesky] Failed to send scan error message:', error);
             });
+        }
+    }
+}
+
+// Helper function to send benchmark results
+function sendBenchmarkResults() {
+    const benchmark = getBenchmark('bluesky');
+    if (benchmark) {
+        const benchmarkResults = benchmark.getResults();
+        if (benchmarkResults) {
+            try {
+                chrome.runtime.sendMessage({
+                    type: 'BENCHMARK_RESULTS',
+                    platform: 'bluesky',
+                    results: benchmarkResults
+                }).catch(() => {});
+            } catch (e) {
+                console.warn('[Bluesky] Failed to send benchmark results:', e);
+            }
         }
     }
 }
@@ -750,6 +839,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         } else if (request.type === 'PING') {
             // Respond to ping to indicate this tab is active
             sendResponse({ active: true, platform: 'bluesky' });
+        } else if (request.type === 'STOP_SCAN') {
+            // Send benchmark results before stopping
+            sendBenchmarkResults();
+            sendResponse({ stopped: true });
         }
     } catch (error) {
         console.error('[Bluesky] Error handling message:', error);

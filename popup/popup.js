@@ -1277,19 +1277,23 @@ class CommisionsfinderPopup {
     
     // Add error handler for avatar image (CSP-compliant)
     const avatarImg = element.querySelector('.result-avatar');
-    avatarImg.addEventListener('error', () => {
-      avatarImg.src = this.getDefaultAvatar();
-    });
+    if (avatarImg) {
+      avatarImg.addEventListener('error', () => {
+        avatarImg.src = this.getDefaultAvatar();
+      });
+    }
     
     // Add click handler for the info section only
     const infoSection = element.querySelector('.result-info');
-    infoSection.addEventListener('click', (e) => {
-      // Don't open profile if clicking on dropdown elements
-      if (e.target.closest('.platform-dropdown-trigger') || e.target.closest('.platform-dropdown')) {
-        return;
-      }
-      this.openArtistProfile(result);
-    });
+    if (infoSection) {
+      infoSection.addEventListener('click', (e) => {
+        // Don't open profile if clicking on dropdown elements
+        if (e.target.closest('.platform-dropdown-trigger') || e.target.closest('.platform-dropdown')) {
+          return;
+        }
+        this.openArtistProfile(result);
+      });
+    }
     
     // Add handlers for platform dropdown
     const dropdownTrigger = element.querySelector('.platform-dropdown-trigger');
@@ -2341,33 +2345,56 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
         // Create table header
         const headerRow = document.createElement('tr');
         headerRow.innerHTML = `
-            <th>Model</th>
-            <th>F1 Score</th>
-            <th>Precision</th>
-            <th>Recall</th>
-            <th>Samples/sec</th>
+            <th>Platform</th>
+            <th>Step</th>
+            <th>Profiles</th>
             <th>Total Time</th>
-            <th>Samples</th>
+            <th>Average Time</th>
+            <th>Count</th>
+            <th>% of Total</th>
         `;
         this.benchmarkTable.appendChild(headerRow);
 
         // Add results rows
         results.forEach(result => {
             const row = document.createElement('tr');
-            const f1Class = this.getMetricClass(parseFloat(result.f1Score));
-            const precisionClass = this.getMetricClass(parseFloat(result.precision));
-            const recallClass = this.getMetricClass(parseFloat(result.recall));
-            const speedClass = this.getSpeedClass(parseFloat(result.samplesPerSecond));
             
-            row.innerHTML = `
-                <td>${this.getQuantizationDisplayName(result.quantization)}</td>
-                <td class="${f1Class}">${(parseFloat(result.f1Score) * 100).toFixed(1)}%</td>
-                <td class="${precisionClass}">${(parseFloat(result.precision) * 100).toFixed(1)}%</td>
-                <td class="${recallClass}">${(parseFloat(result.recall) * 100).toFixed(1)}%</td>
-                <td class="${speedClass}">${result.samplesPerSecond}/s</td>
-                <td>${result.totalTimeSeconds}s</td>
-                <td>${result.total}</td>
-            `;
+            // Style header rows differently
+            if (result.isHeader) {
+                row.style.fontWeight = 'bold';
+                row.style.backgroundColor = '#374151';
+                row.style.color = '#e5e7eb';
+                row.innerHTML = `
+                    <td>${result.platform}</td>
+                    <td colspan="2">${result.step}</td>
+                    <td>${result.profileCount}</td>
+                    <td>${result.totalTime.toFixed(2)}s</td>
+                    <td colspan="2">-</td>
+                `;
+            } else {
+                // Color code based on percentage (red for high, green for low)
+                const percentage = parseFloat(result.percentage);
+                let rowClass = '';
+                if (percentage > 30) {
+                    rowClass = 'benchmark-slow';
+                } else if (percentage > 15) {
+                    rowClass = 'benchmark-medium';
+                } else {
+                    rowClass = 'benchmark-fast';
+                }
+                
+                row.className = rowClass;
+                row.innerHTML = `
+                    <td>${result.platform}</td>
+                    <td>${result.step}</td>
+                    <td>-</td>
+                    <td>${result.totalSeconds.toFixed(2)}s</td>
+                    <td>${result.averageMs.toFixed(0)}ms</td>
+                    <td>${result.count}</td>
+                    <td>${result.percentage.toFixed(1)}%</td>
+                `;
+            }
+            
             this.benchmarkTable.appendChild(row);
         });
 
@@ -2382,7 +2409,7 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
         this.runBenchmarkBtn.disabled = false;
         this.benchmarkProgress.style.display = 'none';
     }
-}
+  }
 
 getMetricClass(value) {
     if (value >= 0.8) return 'accuracy-high';

@@ -1907,6 +1907,19 @@ body {
     font-weight: bold;
 }
 
+/* Benchmark performance indicators */
+.benchmark-table .benchmark-fast {
+    background-color: rgba(16, 185, 129, 0.1);
+}
+
+.benchmark-table .benchmark-medium {
+    background-color: rgba(245, 158, 11, 0.1);
+}
+
+.benchmark-table .benchmark-slow {
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
 /* Benchmark results section */
 #benchmarkResults h4 {
     margin: 16px 0 8px;

@@ -253,6 +253,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
     }
 
+    if (request.type === 'BENCHMARK_RESULTS') {
+      handleBenchmarkResults(request.platform, request.results);
+      // No response needed for fire-and-forget messages
+      return false;
+    }
+
+    if (request.type === 'GET_BENCHMARK_RESULTS') {
+      getStoredBenchmarkResults(sendResponse);
+      return true;
+    }
+
     console.warn('Unknown message type:', request.type);
 });
 
@@ -855,6 +866,18 @@ async function handleStopScan(sendResponse) {
       activeScansInProgress: false, // Clear active state since we're stopping
       // Keep activePlatforms and completedPlatforms for potential resumption
     });
+    
+    // Request benchmark results from content scripts before closing tabs
+    for (const [platform, tabId] of activeScanTabs) {
+      try {
+        // Send STOP_SCAN message to get benchmark results before closing
+        await chrome.tabs.sendMessage(tabId, { type: 'STOP_SCAN' });
+        // Give a small delay for the message to be processed
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.warn(`Failed to send STOP_SCAN to ${platform} tab ${tabId}:`, error);
+      }
+    }
     
     // Close all active scan tabs
     for (const [platform, tabId] of activeScanTabs) {
@@ -1571,6 +1594,41 @@ chrome.action.onClicked.addListener(async (tab) => {
   // Open the extension in a window
   await handleOpenInWindow();
 });
+
+// Store benchmark results
+let benchmarkResults = {};
+
+async function handleBenchmarkResults(platform, results) {
+  console.log(`[Background] Received benchmark results for ${platform}:`, results);
+  benchmarkResults[platform] = results;
+  
+  // Store in chrome.storage for persistence
+  await chrome.storage.local.set({ benchmarkResults });
+  
+  // Forward to popup if open
+  chrome.runtime.sendMessage({
+    type: 'BENCHMARK_RESULTS_UPDATE',
+    platform: platform,
+    results: results
+  }).catch(() => {}); // Ignore if popup is closed
+}
+
+async function getStoredBenchmarkResults(sendResponse) {
+  try {
+    const stored = await chrome.storage.local.get(['benchmarkResults']);
+    sendResponse({
+      success: true,
+      results: stored.benchmarkResults || benchmarkResults
+    });
+  } catch (error) {
+    console.error('Error getting benchmark results:', error);
+    sendResponse({
+      success: false,
+      error: error.message,
+      results: benchmarkResults
+    });
+  }
+}
 
 // Initialize debug mode when extension starts
 initDebugMode();

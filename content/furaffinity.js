@@ -145,6 +145,9 @@
 
 console.log('CommsFinder: FurAffinity content script loaded');
 
+// Import performance benchmark
+import { getBenchmark, enableBenchmark } from '../utils/performance-benchmark.js';
+
 // Create progress overlay
 function createProgressOverlay() {
     const overlay = document.createElement('div');
@@ -633,6 +636,7 @@ function extractTextContent(element, taskName = '', startProgress = 0, endProgre
 
 // Scrape artist profile
 async function scrapeArtistProfile(username) {
+    const benchmark = getBenchmark('furaffinity');
     const profileUrl = `https://www.furaffinity.net/user/${username}/`;
     
     for (let retry = 0; retry < CONFIG.MAX_RETRIES; retry++) {
@@ -644,6 +648,7 @@ async function scrapeArtistProfile(username) {
                 subProgress: 5
             });
 
+            benchmark.startStep('Fetching profile page');
             const response = await fetch(profileUrl);
             if (!response.ok) {
                 if (response.status === 429 || response.status === 503) {
@@ -655,9 +660,12 @@ async function scrapeArtistProfile(username) {
             
             const html = await response.text();
             console.log('[CommsFinder] Got profile HTML, length:', html.length);
+            benchmark.endStep();
             
+            benchmark.startStep('Parsing HTML');
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: username,
@@ -665,9 +673,11 @@ async function scrapeArtistProfile(username) {
                 subProgress: 15
             });
 
+            benchmark.startStep('Extracting basic info');
             // Extract basic info
             const avatarImg = doc.querySelector('userpage-nav-avatar img');
             const displayNameElem = doc.querySelector('span.js-displayName');
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: username,
@@ -675,9 +685,11 @@ async function scrapeArtistProfile(username) {
                 subProgress: 25
             });
 
+            benchmark.startStep('Extracting bio');
             // Extract bio with progress updates
             const bioElem = doc.querySelector('.userpage-profile.section-body');
             const bio = extractTextContent(bioElem, 'Analyzing bio', 25, 35);
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: username,
@@ -685,6 +697,7 @@ async function scrapeArtistProfile(username) {
                 subProgress: 40
             });
 
+            benchmark.startStep('Checking commission status');
             // Extract commission status
             let commissionStatus = 'unknown';
             const commissionRow = Array.from(doc.querySelectorAll('.table-row')).find(row => {
@@ -700,6 +713,7 @@ async function scrapeArtistProfile(username) {
                     commissionStatus = 'closed';
                 }
             }
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: username,
@@ -707,9 +721,11 @@ async function scrapeArtistProfile(username) {
                 subProgress: 55
             });
 
+            benchmark.startStep('Extracting journal');
             // Extract journal with progress updates
             const journalElem = doc.querySelector('.user-submitted-links');
             const journal = extractTextContent(journalElem, 'Processing journal', 55, 65).substring(0, CONFIG.MAX_JOURNAL_LENGTH);
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: username,
@@ -717,6 +733,7 @@ async function scrapeArtistProfile(username) {
                 subProgress: 70
             });
 
+            benchmark.startStep('Scraping gallery');
             // Get gallery preview data
             console.log('[CommsFinder] Starting gallery scrape for:', username);
             console.log('[CommsFinder] Gallery elements found:', doc.querySelectorAll('.userpage-gallery').length);
@@ -725,13 +742,15 @@ async function scrapeArtistProfile(username) {
             
             const galleryData = await scrapeGalleryPreview(doc, username);
             console.log('[CommsFinder] Gallery data result:', galleryData);
+            benchmark.endStep();
             
             progress.update({
                 currentArtist: username,
                 subTask: 'Finalizing artist data',
                 subProgress: 95
             });
-            
+
+            benchmark.startStep('Finalizing artist data');
             // Prepare artist data
             const artistData = {
                 username: username,
@@ -747,9 +766,14 @@ async function scrapeArtistProfile(username) {
             };
             
             console.log('[CommsFinder] Prepared artist data:', artistData);
+            benchmark.endStep();
+            benchmark.incrementProfileCount();
             return artistData;
             
         } catch (error) {
+            if (benchmark && benchmark.currentStep) {
+                benchmark.endStep();
+            }
             console.error(`[CommsFinder] Error scraping profile for ${username} (attempt ${retry + 1}):`, error);
             progress.update({ errors: progress.errors + 1 });
             
@@ -898,6 +922,10 @@ async function scrapeSubmission(url) {
 async function scanFurAffinity(existingProgress = null) {
     console.log('Starting FurAffinity scan...', existingProgress ? 'Resuming from saved progress' : 'Fresh scan');
     
+    // Enable benchmarking
+    const benchmark = enableBenchmark('furaffinity');
+    benchmark.reset();
+    
     // Create and show overlay
     createProgressOverlay();
     updateProgressOverlay('show');
@@ -973,7 +1001,14 @@ async function scanFurAffinity(existingProgress = null) {
                 console.log('[CommsFinder] Sending analysis request:', analysisRequest);
 
                 try {
+                    if (benchmark) {
+                        benchmark.startStep('Analyzing content');
+                    }
                     const result = await sendAnalysisRequestWithRetry(analysisRequest, artistData);
+                    if (benchmark) {
+                        benchmark.endStep();
+                    }
+                    
                     if (result) {
                         console.log('[CommsFinder] Final artist result:', result);
                         
@@ -984,6 +1019,9 @@ async function scanFurAffinity(existingProgress = null) {
                         });
                     }
                 } catch (error) {
+                    if (benchmark && benchmark.currentStep) {
+                        benchmark.endStep();
+                    }
                     console.error('[CommsFinder] Analysis failed after retries:', error);
                     // Continue with next artist instead of failing completely
                 }
@@ -999,6 +1037,22 @@ async function scanFurAffinity(existingProgress = null) {
             total: artists.length
         });
         
+        // Send benchmark results (benchmark is already defined at function start)
+        if (benchmark) {
+            const benchmarkResults = benchmark.getResults();
+            if (benchmarkResults) {
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'BENCHMARK_RESULTS',
+                        platform: 'furaffinity',
+                        results: benchmarkResults
+                    }).catch(() => {});
+                } catch (e) {
+                    console.warn('[FurAffinity] Failed to send benchmark results:', e);
+                }
+            }
+        }
+        
         chrome.runtime.sendMessage({
             type: 'SCAN_COMPLETE',
             platform: 'furaffinity',
@@ -1008,6 +1062,23 @@ async function scanFurAffinity(existingProgress = null) {
     } catch (error) {
         console.error('FurAffinity scan error:', error);
         updateProgressOverlay('error', { error: error.message });
+        
+        // Send benchmark results even on error
+        if (benchmark) {
+            const benchmarkResults = benchmark.getResults();
+            if (benchmarkResults) {
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'BENCHMARK_RESULTS',
+                        platform: 'furaffinity',
+                        results: benchmarkResults
+                    }).catch(() => {});
+                } catch (e) {
+                    console.warn('[FurAffinity] Failed to send benchmark results on error:', e);
+                }
+            }
+        }
+        
         chrome.runtime.sendMessage({
             type: 'SCAN_ERROR',
             platform: 'furaffinity',
@@ -1315,6 +1386,25 @@ async function sendAnalysisRequestWithRetry(analysisRequest, artistData, maxRetr
     }
 }
 
+// Helper function to send benchmark results
+function sendBenchmarkResults() {
+    const benchmark = getBenchmark('furaffinity');
+    if (benchmark) {
+        const benchmarkResults = benchmark.getResults();
+        if (benchmarkResults) {
+            try {
+                chrome.runtime.sendMessage({
+                    type: 'BENCHMARK_RESULTS',
+                    platform: 'furaffinity',
+                    results: benchmarkResults
+                }).catch(() => {});
+            } catch (e) {
+                console.warn('[FurAffinity] Failed to send benchmark results:', e);
+            }
+        }
+    }
+}
+
 // Listen for messages from the background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'START_SCAN' && request.platform === 'furaffinity') {
@@ -1323,6 +1413,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.type === 'PING') {
         // Respond to ping to indicate this tab is active
         sendResponse({ active: true, platform: 'furaffinity' });
+    } else if (request.type === 'STOP_SCAN') {
+        // Send benchmark results before stopping
+        sendBenchmarkResults();
+        sendResponse({ stopped: true });
     }
     return true;
 });

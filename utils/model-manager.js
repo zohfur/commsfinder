@@ -290,16 +290,18 @@ export async function downloadAndCacheModel(progressCallback, quantizationType =
       
       while (retryCount < maxRetries) {
         try {
+          // Use minimal headers to avoid CORS preflight issues
+          // Custom headers trigger preflight OPTIONS requests which may fail with 401
+          // Simple requests (GET with simple headers) don't require preflight
           response = await fetch(url, {
             method: 'GET',
             signal: controller.signal,
             mode: 'cors',
-            credentials: 'omit',
-            headers: {
-              'Accept': '*/*',
-              'Cache-Control': 'no-cache',
-              'User-Agent': 'CommsFinder-Extension/1.0.5'
-            }
+            credentials: 'omit'
+            // Removed custom headers to avoid CORS preflight:
+            // - User-Agent: Can't be set from JS anyway (forbidden header)
+            // - Cache-Control: Triggers preflight
+            // - Accept: Using default is fine
           });
           break; // Success, exit retry loop
         } catch (fetchError) {
@@ -400,7 +402,20 @@ export async function validateModelFiles(quantizationType = currentQuantization)
   for (const file of config.files) {
     const url = getModelFileRemoteUrl(file);
     try {
-      const response = await fetch(url, { method: 'HEAD' }); // Only check headers
+      // Use GET with minimal headers to avoid CORS preflight issues
+      // HEAD requests can trigger preflight, so we use GET and check response
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout for validation
+      
+      const response = await fetch(url, { 
+        method: 'GET',
+        mode: 'cors',
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
       const fileInfo = {
         file,
         url,
