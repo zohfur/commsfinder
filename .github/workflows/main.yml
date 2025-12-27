@@ -1,0 +1,62 @@
+name: Build for Chrome and Firefox
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build Chrome & Firefox Extensions
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Get Extension Version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build Chrome & Firefox Extensions
+        run: npm run build:both
+
+      - name: Zip Chrome build (exclude firefox output)
+        run: |
+          cd dist
+          zip -r ../commsfinder-chrome-${{ steps.version.outputs.version }}.zip . -x "firefox/*"
+
+      - name: Find Firefox build zip
+        id: ff_zip
+        run: |
+          FILE=$(ls dist/firefox/*.zip | head -n1)
+          if [[ -z "$FILE" ]]; then
+            echo "No Firefox zip found in dist/firefox"
+            exit 1
+          fi
+          FILENAME="commsfinder-firefox-${{ steps.version.outputs.version }}.zip"
+          cp "$FILE" "dist/firefox/$FILENAME"
+          echo "ff_zippath=dist/firefox/$FILENAME" >> $GITHUB_OUTPUT
+
+      - name: Upload Chrome Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: commsfinder-chrome-${{ steps.version.outputs.version }}
+          path: commsfinder-chrome-${{ steps.version.outputs.version }}.zip
+
+      - name: Upload Firefox Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: commsfinder-firefox-${{ steps.version.outputs.version }}
+          path: ${{ steps.ff_zip.outputs.ff_zippath }}
