@@ -121,7 +121,249 @@ const CONFIG = {
     MAX_POSTS_PER_USER: 5, // Limit posts to analyze per artist
     MAX_JOURNAL_LENGTH: 5000, // Limit bio and post text length
     API_BASE: 'https://public.api.bsky.app/xrpc',
+    CACHE_TTL: 30 * 60 * 1000, // 30 minutes cache TTL
 };
+
+// Request deduplication: track in-flight requests to avoid duplicates
+const activeRequests = new Map(); // URL → Promise
+
+// Profile data cache with TTL (in-memory for fast access)
+const profileCache = new Map(); // userDid → { data, timestamp }
+
+// Storage key for persistent cache
+const CACHE_STORAGE_KEY = 'bluesky_profile_cache';
+let cacheInitialized = false;
+
+// Initialize cache from persistent storage
+async function initializeCache() {
+    if (cacheInitialized) return;
+    
+    try {
+        if (!isExtensionContextValid()) {
+            console.warn('[Bluesky] Extension context invalid, skipping cache initialization');
+            cacheInitialized = true;
+            return;
+        }
+        
+        const result = await chrome.storage.local.get([CACHE_STORAGE_KEY]);
+        const storedCache = result[CACHE_STORAGE_KEY];
+        
+        if (storedCache && typeof storedCache === 'object') {
+            const now = Date.now();
+            let loadedCount = 0;
+            
+            // Load valid entries (not expired)
+            for (const [userDid, entry] of Object.entries(storedCache)) {
+                if (entry && entry.timestamp && (now - entry.timestamp) < CONFIG.CACHE_TTL) {
+                    profileCache.set(userDid, entry);
+                    loadedCount++;
+                }
+            }
+            
+            console.log(`[Bluesky] Loaded ${loadedCount} cached profiles from storage`);
+            
+            // Clean up expired entries from storage (if any were expired)
+            if (Object.keys(storedCache).length > loadedCount) {
+                // Save cleaned cache immediately (not debounced) since we're initializing
+                try {
+                    const cleanedCache = {};
+                    const now = Date.now();
+                    for (const [userDid, entry] of Object.entries(storedCache)) {
+                        if (entry && entry.timestamp && (now - entry.timestamp) < CONFIG.CACHE_TTL) {
+                            cleanedCache[userDid] = entry;
+                        }
+                    }
+                    await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: cleanedCache });
+                } catch (error) {
+                    console.warn('[Bluesky] Failed to clean expired cache entries:', error);
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('[Bluesky] Failed to initialize cache from storage:', error);
+        // Continue with empty cache - in-memory only
+    }
+    
+    cacheInitialized = true;
+}
+
+// Save cache to persistent storage (debounced to avoid excessive writes)
+let saveCacheTimeout = null;
+async function saveCacheToStorage() {
+    if (!isExtensionContextValid()) {
+        return; // Can't save if extension context is invalid
+    }
+    
+    // Debounce saves to avoid excessive storage writes
+    if (saveCacheTimeout) {
+        clearTimeout(saveCacheTimeout);
+    }
+    
+    saveCacheTimeout = setTimeout(async () => {
+        try {
+            const now = Date.now();
+            const cacheToSave = {};
+            
+            // Only save valid (non-expired) entries
+            for (const [userDid, entry] of profileCache.entries()) {
+                if (entry && entry.timestamp && (now - entry.timestamp) < CONFIG.CACHE_TTL) {
+                    cacheToSave[userDid] = entry;
+                }
+            }
+            
+            // Limit cache size to prevent storage quota issues (keep most recent 500 entries)
+            const entries = Object.entries(cacheToSave);
+            if (entries.length > 500) {
+                // Sort by timestamp and keep most recent 500
+                entries.sort((a, b) => b[1].timestamp - a[1].timestamp);
+                const limitedCache = {};
+                for (let i = 0; i < 500; i++) {
+                    limitedCache[entries[i][0]] = entries[i][1];
+                }
+                await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: limitedCache });
+            } else {
+                await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: cacheToSave });
+            }
+            
+            console.log(`[Bluesky] Saved ${Object.keys(cacheToSave).length} profiles to persistent cache`);
+        } catch (error) {
+            console.warn('[Bluesky] Failed to save cache to storage:', error);
+            // Continue - cache will work in-memory only
+        }
+    }, 2000); // Debounce: save 2 seconds after last cache update
+}
+
+// Clean up expired entries from both memory and storage
+async function cleanupExpiredCache() {
+    const now = Date.now();
+    let cleanedMemory = 0;
+    let cleanedStorage = 0;
+    
+    // Clean memory cache
+    for (const [userDid, entry] of profileCache.entries()) {
+        if (!entry.timestamp || (now - entry.timestamp) >= CONFIG.CACHE_TTL) {
+            profileCache.delete(userDid);
+            cleanedMemory++;
+        }
+    }
+    
+    // Clean storage cache
+    if (isExtensionContextValid()) {
+        try {
+            const result = await chrome.storage.local.get([CACHE_STORAGE_KEY]);
+            const storedCache = result[CACHE_STORAGE_KEY];
+            
+            if (storedCache && typeof storedCache === 'object') {
+                const cleanedCache = {};
+                for (const [userDid, entry] of Object.entries(storedCache)) {
+                    if (entry && entry.timestamp && (now - entry.timestamp) < CONFIG.CACHE_TTL) {
+                        cleanedCache[userDid] = entry;
+                    } else {
+                        cleanedStorage++;
+                    }
+                }
+                
+                if (cleanedStorage > 0) {
+                    await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: cleanedCache });
+                }
+            }
+        } catch (error) {
+            console.warn('[Bluesky] Failed to clean storage cache:', error);
+        }
+    }
+    
+    if (cleanedMemory > 0 || cleanedStorage > 0) {
+        console.log(`[Bluesky] Cleaned ${cleanedMemory} memory entries and ${cleanedStorage} storage entries`);
+    }
+}
+
+// Deduplicated fetch function - returns existing promise if request is in flight
+async function dedupeFetch(url, options = {}) {
+    // Return existing promise if request is in flight
+    if (activeRequests.has(url)) {
+        console.log(`[Bluesky] Request deduplication: reusing in-flight request for ${url}`);
+        return activeRequests.get(url);
+    }
+
+    // Create new request promise
+    const promise = fetch(url, options)
+        .finally(() => {
+            // Clean up when done
+            activeRequests.delete(url);
+        });
+
+    activeRequests.set(url, promise);
+    return promise;
+}
+
+// Get cached profile data if still valid (checks both memory and storage)
+async function getCachedProfile(userDid) {
+    // Ensure cache is initialized
+    if (!cacheInitialized) {
+        await initializeCache();
+    }
+    
+    // Check in-memory cache first (fastest)
+    const cached = profileCache.get(userDid);
+    if (cached && (Date.now() - cached.timestamp) < CONFIG.CACHE_TTL) {
+        console.log(`[Bluesky] Cache hit (memory) for profile: ${userDid}`);
+        return cached.data;
+    }
+    
+    // Remove expired cache entry from memory
+    if (cached) {
+        profileCache.delete(userDid);
+    }
+    
+    // If not in memory, try loading from storage (only if extension context is valid)
+    if (isExtensionContextValid()) {
+        try {
+            const result = await chrome.storage.local.get([CACHE_STORAGE_KEY]);
+            const storedCache = result[CACHE_STORAGE_KEY];
+            
+            if (storedCache && storedCache[userDid]) {
+                const storedEntry = storedCache[userDid];
+                const now = Date.now();
+                
+                if (storedEntry.timestamp && (now - storedEntry.timestamp) < CONFIG.CACHE_TTL) {
+                    // Load into memory cache for faster future access
+                    profileCache.set(userDid, storedEntry);
+                    console.log(`[Bluesky] Cache hit (storage) for profile: ${userDid}`);
+                    return storedEntry.data;
+                } else {
+                    // Expired - remove from storage
+                    delete storedCache[userDid];
+                    await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: storedCache });
+                }
+            }
+        } catch (error) {
+            console.warn('[Bluesky] Failed to check storage cache:', error);
+            // Continue - will fetch fresh data
+        }
+    }
+    
+    return null;
+}
+
+// Cache profile data (both memory and storage)
+async function cacheProfile(userDid, data) {
+    const entry = {
+        data: data,
+        timestamp: Date.now()
+    };
+    
+    // Update in-memory cache
+    profileCache.set(userDid, entry);
+    console.log(`[Bluesky] Cached profile data for: ${userDid}`);
+    
+    // Clean up old cache entries periodically (keep cache size reasonable)
+    if (profileCache.size > 1000) {
+        await cleanupExpiredCache();
+    }
+    
+    // Save to persistent storage (debounced - schedules save for 2 seconds later)
+    saveCacheToStorage();
+}
 
 // Progress tracking (same structure as FurAffinity)
 class ProgressTracker {
@@ -378,6 +620,13 @@ async function getFollowingList(userDid) {
 async function getUserProfileAndPosts(userDid, userHandle) {
     const benchmark = getBenchmark('bluesky');
     
+    // Check cache first (async - may check storage)
+    const cachedData = await getCachedProfile(userDid);
+    if (cachedData) {
+        console.log(`[Bluesky] Using cached data for: ${userHandle}`);
+        return cachedData;
+    }
+    
     for (let retry = 0; retry < CONFIG.MAX_RETRIES; retry++) {
         try {
             console.log(`[Bluesky] Fetching profile and posts for: ${userHandle}`);
@@ -388,46 +637,40 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 subProgress: 10
             });
 
-            benchmark.startStep('Fetching profile');
-            // Get profile
-            const profileResponse = await fetch(`${CONFIG.API_BASE}/app.bsky.actor.getProfile?actor=${userDid}`);
-            if (!profileResponse.ok) {
+            benchmark.startStep('Parallel fetch profile and posts');
+            
+            // Parallelize independent requests: fetch profile and posts simultaneously
+            const profileUrl = `${CONFIG.API_BASE}/app.bsky.actor.getProfile?actor=${userDid}`;
+            const postsUrl = `${CONFIG.API_BASE}/app.bsky.feed.getAuthorFeed?actor=${userDid}&limit=${CONFIG.MAX_POSTS_PER_USER}`;
+            
+            // Use deduplicated fetch to avoid duplicate requests
+            const [profileResponse, postsResponse] = await Promise.all([
+                dedupeFetch(profileUrl),
+                dedupeFetch(postsUrl)
+            ]);
+            
+            if (!profileResponse.ok || !postsResponse.ok) {
                 benchmark.endStep();
-                if (profileResponse.status === 429) {
+                if (profileResponse.status === 429 || postsResponse.status === 429) {
                     await errorDelay();
                     continue;
                 }
-                throw new Error(`Profile HTTP ${profileResponse.status}`);
+                const errorStatus = profileResponse.status || postsResponse.status;
+                throw new Error(`HTTP ${errorStatus}`);
             }
             
-            const profile = await profileResponse.json();
-            benchmark.endStep();
+            // Parse JSON responses in parallel
+            const [profile, postsData] = await Promise.all([
+                profileResponse.json(),
+                postsResponse.json()
+            ]);
             
-            progress.update({
-                currentArtist: userHandle,
-                subTask: 'Fetching posts',
-                subProgress: 30
-            });
-
-            benchmark.startStep('Fetching posts');
-            // Get recent posts
-            const postsResponse = await fetch(`${CONFIG.API_BASE}/app.bsky.feed.getAuthorFeed?actor=${userDid}&limit=${CONFIG.MAX_POSTS_PER_USER}`);
-            if (!postsResponse.ok) {
-                benchmark.endStep();
-                if (postsResponse.status === 429) {
-                    await errorDelay();
-                    continue;
-                }
-                throw new Error(`Posts HTTP ${postsResponse.status}`);
-            }
-            
-            const postsData = await postsResponse.json();
             benchmark.endStep();
             
             progress.update({
                 currentArtist: userHandle,
                 subTask: 'Processing posts',
-                subProgress: 60
+                subProgress: 50
             });
 
             benchmark.startStep('Processing posts');
@@ -470,12 +713,6 @@ async function getUserProfileAndPosts(userDid, userHandle) {
             // Get most recent non-pinned post
             const recentPost = processedPosts.find(post => !post.isPinned) || null;
             benchmark.endStep();
-            
-            progress.update({
-                currentArtist: userHandle,
-                subTask: 'Finalizing data',
-                subProgress: 95
-            });
 
             benchmark.startStep('Finalizing artist data');
             const artistData = {
@@ -494,6 +731,9 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 lastUpdated: Date.now()
             };
             benchmark.endStep();
+            
+            // Cache the result
+            cacheProfile(userDid, artistData);
             
             console.log(`[Bluesky] Processed user data for: ${userHandle}`, artistData);
             return artistData;
@@ -556,8 +796,10 @@ async function fetchPinnedPost(postUri) {
         
         const [, , rkey] = uriParts;
         
-        // Fetch the post using getPostThread
-        const response = await fetch(`${CONFIG.API_BASE}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(postUri)}`);
+        // Use deduplicated fetch for pinned post
+        const url = `${CONFIG.API_BASE}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(postUri)}`;
+        const response = await dedupeFetch(url);
+        
         if (!response.ok) {
             console.error(`[Bluesky] Failed to fetch pinned post: HTTP ${response.status}`);
             return null;
@@ -651,6 +893,9 @@ function formatDataForAnalysis(artistData) {
 async function scanBluesky(existingProgress = null) {
     console.log('[Bluesky] Starting Bluesky scan...', existingProgress ? 'Resuming from saved progress' : 'Fresh scan');
     
+    // Initialize cache from storage
+    await initializeCache();
+    
     // Enable benchmarking
     const benchmark = enableBenchmark('bluesky');
     benchmark.reset();
@@ -689,6 +934,7 @@ async function scanBluesky(existingProgress = null) {
             following = existingProgress.following;
             startIndex = existingProgress.completed || 0;
             
+            // Don't re-sort when resuming
             // Update progress tracker with existing data
             progress.update({
                 phase: 'scanning_artists',
@@ -704,6 +950,19 @@ async function scanBluesky(existingProgress = null) {
             following = await getFollowingList(authStatus.did);
             console.log(`[Bluesky] Found ${following.length} users to scan`);
             
+            // Sort following list using black magic fuckery
+            following = [...following].sort((a, b) => {
+                const aHasDesc = a.description ? 1 : 0;
+                const bHasDesc = b.description ? 1 : 0;
+                if (aHasDesc !== bHasDesc) return bHasDesc - aHasDesc;
+                const aPosts = a.postsCount || 0;
+                const bPosts = b.postsCount || 0;
+                if (aPosts !== bPosts) return bPosts - aPosts;
+                const aFollowers = a.followersCount || 0;
+                const bFollowers = b.followersCount || 0;
+                return bFollowers - aFollowers;
+            });
+            
             progress.update({
                 phase: 'scanning_artists',
                 total: following.length,
@@ -718,7 +977,7 @@ async function scanBluesky(existingProgress = null) {
             progress.update({
                 currentArtist: user.handle,
                 completed: i,
-                following: following // Store full following list in progress
+                following: following // Store following list in progress
             });
             
             const artistData = await getUserProfileAndPosts(user.did, user.handle);
