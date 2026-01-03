@@ -27,6 +27,127 @@ env.backends.onnx.wasm = {
   simd: true
 };
 
+// Storage key for persistent analysis cache
+const ANALYSIS_CACHE_STORAGE_KEY = 'ai_analysis_cache';
+const ANALYSIS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL
+let cacheInitialized = false;
+
+// Helper to check if chrome.storage is available (works in service worker, not in web worker)
+function isStorageAvailable() {
+    try {
+        return typeof chrome !== 'undefined' && 
+               chrome.storage && 
+               chrome.storage.local &&
+               typeof chrome.runtime !== 'undefined' &&
+               chrome.runtime.id;
+    } catch (error) {
+        return false;
+    }
+}
+
+// Initialize cache from persistent storage (only if storage is available)
+async function initializeAnalysisCache() {
+    if (cacheInitialized || !isStorageAvailable()) {
+        return;
+    }
+    
+    try {
+        const result = await chrome.storage.local.get([ANALYSIS_CACHE_STORAGE_KEY]);
+        const storedCache = result[ANALYSIS_CACHE_STORAGE_KEY];
+        
+        if (storedCache && typeof storedCache === 'object') {
+            const now = Date.now();
+            let loadedCount = 0;
+            
+            // Load valid entries (not expired)
+            for (const [cacheKey, entry] of Object.entries(storedCache)) {
+                if (entry && entry.timestamp && (now - entry.timestamp) < ANALYSIS_CACHE_TTL) {
+                    loadedCount++;
+                }
+            }
+            
+            if (loadedCount > 0) {
+                debugLog(`[AI Analyzer] Loaded ${loadedCount} cached analysis results from storage`);
+            }
+            
+            // Clean up expired entries from storage
+            if (Object.keys(storedCache).length > loadedCount) {
+                try {
+                    const cleanedCache = {};
+                    const cleanupNow = Date.now();
+                    for (const [cacheKey, entry] of Object.entries(storedCache)) {
+                        if (entry && entry.timestamp && (cleanupNow - entry.timestamp) < ANALYSIS_CACHE_TTL) {
+                            cleanedCache[cacheKey] = entry;
+                        }
+                    }
+                    await chrome.storage.local.set({ [ANALYSIS_CACHE_STORAGE_KEY]: cleanedCache });
+                } catch (error) {
+                    debugLog('[AI Analyzer] Failed to clean expired cache entries:', error);
+                }
+            }
+        }
+    } catch (error) {
+        debugLog('[AI Analyzer] Failed to initialize cache from storage:', error);
+        // Continue with empty cache in-memory only
+    }
+    
+    cacheInitialized = true;
+}
+
+// Save cache to persistent storage (debounced to avoid excessive writes)
+let saveCacheTimeout = null;
+async function saveAnalysisCacheToStorage() {
+    if (!isStorageAvailable()) {
+        return;
+    }
+    
+    // avoid excessive storage writes
+    if (saveCacheTimeout) {
+        clearTimeout(saveCacheTimeout);
+    }
+    
+    saveCacheTimeout = setTimeout(async () => {
+        try {
+            // Get cache from current instance
+            if (!AIAnalyzer.instance || !AIAnalyzer.instance.analysisCache) {
+                return;
+            }
+            
+            const now = Date.now();
+            const cacheData = {};
+            
+            // Only save valid (non-expired) entries from memory cache
+            for (const [cacheKey, result] of AIAnalyzer.instance.analysisCache.entries()) {
+                cacheData[cacheKey] = {
+                    data: result,
+                    timestamp: now
+                };
+            }
+            
+            if (Object.keys(cacheData).length > 0) {
+                // Limit cache size to prevent storage quota issues (keep most recent 200 entries)
+                const entries = Object.entries(cacheData);
+                if (entries.length > 200) {
+                    // Sort by timestamp and keep most recent 200
+                    entries.sort((a, b) => b[1].timestamp - a[1].timestamp);
+                    const limitedCache = {};
+                    for (let i = 0; i < 200; i++) {
+                        limitedCache[entries[i][0]] = entries[i][1];
+                    }
+                    await chrome.storage.local.set({ [ANALYSIS_CACHE_STORAGE_KEY]: limitedCache });
+                } else {
+                    await chrome.storage.local.set({ [ANALYSIS_CACHE_STORAGE_KEY]: cacheData });
+                }
+                
+                debugLog(`[AI Analyzer] Saved ${Object.keys(cacheData).length} analysis results to persistent cache`);
+            }
+        } catch (error) {
+            debugLog('[AI Analyzer] Failed to save cache to storage:', error);
+            // cache will work in-memory only
+        }
+    }, 2000); // save 2 seconds after last cache update
+}
+
 // The primary class for performing AI analysis.
 export class AIAnalyzer {
     static instance = null;
@@ -42,6 +163,7 @@ export class AIAnalyzer {
         // Cache for analysis results to avoid re-analyzing identical text
         this.analysisCache = new Map();
         this.maxCacheSize = 100; // Limit cache size to prevent memory issues
+        AIAnalyzer.instance = this; // Store instance for cache persistence
         this.initialize();
     }
     
@@ -108,9 +230,43 @@ export class AIAnalyzer {
 
             // Check cache first (use text as key since context doesn't affect classification)
             const cacheKey = truncatedText;
+            
+            // Ensure cache is initialized from storage
+            if (!cacheInitialized) {
+                await initializeAnalysisCache();
+            }
+            
+            // Check in-memory cache first
             if (this.analysisCache.has(cacheKey)) {
                 debugLog('[AIAnalyzer] Cache hit for text');
                 return this.analysisCache.get(cacheKey);
+            }
+            
+            // Check persistent storage cache if available
+            if (isStorageAvailable()) {
+                try {
+                    const result = await chrome.storage.local.get([ANALYSIS_CACHE_STORAGE_KEY]);
+                    const storedCache = result[ANALYSIS_CACHE_STORAGE_KEY];
+                    
+                    if (storedCache && storedCache[cacheKey]) {
+                        const entry = storedCache[cacheKey];
+                        const now = Date.now();
+                        
+                        if (entry.timestamp && (now - entry.timestamp) < ANALYSIS_CACHE_TTL) {
+                            // Load into memory cache for faster future access
+                            this.analysisCache.set(cacheKey, entry.data);
+                            debugLog('[AIAnalyzer] Cache hit (storage) for text');
+                            return entry.data;
+                        } else {
+                            // Expired, remove from storage
+                            delete storedCache[cacheKey];
+                            await chrome.storage.local.set({ [ANALYSIS_CACHE_STORAGE_KEY]: storedCache });
+                        }
+                    }
+                } catch (error) {
+                    debugLog('[AI Analyzer] Failed to check storage cache:', error);
+                    // Continue, will analyze fresh
+                }
             }
 
             const result = await this.analyzeWithClassification(truncatedText);
@@ -122,6 +278,9 @@ export class AIAnalyzer {
                 this.analysisCache.delete(firstKey);
             }
             this.analysisCache.set(cacheKey, result);
+            
+            // Save to persistent storage
+            saveAnalysisCacheToStorage();
 
             return result;
 

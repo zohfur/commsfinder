@@ -424,8 +424,8 @@ class CommisionsfinderPopup {
       
       if (response.success) {
         this.currentResults = response.results || [];
-        // Clear search instance when new data is loaded
-        this.searchInstance = null;
+        // Search instance will be reinitialized automatically if data changed
+        // (initializeSearch checks for data changes internally)
         this.updateLastScanTime(response.lastScanDate);
         this.updatePlatformFilterOptions();
         this.applyFilters();
@@ -627,8 +627,8 @@ class CommisionsfinderPopup {
     switch (message.type) {
       case 'RESULTS_UPDATED':
         this.currentResults = message.data || [];
-        // Clear search instance when results are updated
-        this.searchInstance = null;
+        // Search instance will be reinitialized automatically if data changed
+        // (initializeSearch checks for data changes internally)
         this.updatePlatformFilterOptions();
         this.applyFilters();
         this.updateUI();
@@ -644,8 +644,8 @@ class CommisionsfinderPopup {
         this.scanBtn.disabled = false;
         this.scanBtn.querySelector('.scan-text').textContent = 'Scan for Open Commissions';
         this.currentResults = message.data || [];
-        // Clear search instance when scan finishes
-        this.searchInstance = null;
+        // Search instance will be reinitialized automatically if data changed
+        // (initializeSearch checks for data changes internally)
         this.updateLastScanTime(Date.now());
         this.updatePlatformFilterOptions();
         this.applyFilters();
@@ -2244,7 +2244,7 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
     }
     
     this.searchFilter.value = '';
-    this.searchInstance = null;
+    // Don't clear searchInstance - it will be reused if data hasn't changed
     this.applyFilters();
   }
 
