@@ -626,7 +626,18 @@ class CommisionsfinderPopup {
   handleBackgroundMessage(message) {
     switch (message.type) {
       case 'RESULTS_UPDATED':
-        this.currentResults = message.data || [];
+        if (Array.isArray(message.data)) {
+          this.currentResults = message.data;
+        } else if (message.data?.artist) {
+          const { artist, index } = message.data;
+          if (Number.isInteger(index) && index >= 0 && index <= this.currentResults.length) {
+            this.currentResults[index] = artist;
+          } else {
+            this.currentResults.push(artist);
+          }
+        } else {
+          this.currentResults = [];
+        }
         // Clear search instance when results are updated
         this.searchInstance = null;
         this.updatePlatformFilterOptions();
@@ -757,6 +768,32 @@ class CommisionsfinderPopup {
     return Math.round((confidence || 0) * 100);
   }
 
+  escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value || '';
+    return div.innerHTML;
+  }
+
+  getProfileTagsHtml(result) {
+    const tags = Array.isArray(result.profileTags) ? result.profileTags.slice(0, 6) : [];
+    if (tags.length === 0) return '';
+
+    return `
+      <div class="result-tags">
+        ${tags.map(tag => {
+          const matchedAliases = Array.isArray(tag.matchedAliases) && tag.matchedAliases.length > 0
+            ? `Matched: ${tag.matchedAliases.join(', ')}`
+            : `Aliases: ${(tag.aliases || []).slice(0, 8).join(', ')}`;
+          return `
+            <span class="result-tag" title="${this.escapeHtml(matchedAliases)}">
+              ${this.escapeHtml(tag.label || tag.tag)}
+            </span>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
   // Initialize Fuse.js search instance
   initializeSearch(data) {
     if (this.debugSearch) {
@@ -764,8 +801,9 @@ class CommisionsfinderPopup {
     }
     
     // Prepare data for search by normalizing fields
-    const searchData = data.map(item => ({
+    const searchData = data.map((item, index) => ({
       ...item,
+      __resultIndex: index,
       // Ensure displayName exists
       displayName: item.displayName || item.username || 'Unknown Artist',
       // Ensure username exists  
@@ -774,6 +812,16 @@ class CommisionsfinderPopup {
       bio: item.bio || '',
       // Convert triggers array to searchable string
       triggers: Array.isArray(item.triggers) ? item.triggers.join(' ') : (item.triggers || ''),
+      // Include canonical tags and aliases so alternate phrasing finds tagged profiles
+      profileTagSearch: [
+        item.tagSearchText || '',
+        Array.isArray(item.tagAliases) ? item.tagAliases.join(' ') : '',
+        Array.isArray(item.profileTags)
+          ? item.profileTags
+              .flatMap(tag => [tag.tag, tag.label, ...(tag.aliases || []), ...(tag.matchedAliases || [])])
+              .join(' ')
+          : ''
+      ].join(' '),
       // Add platform name as searchable field
       platformName: this.formatPlatformName(item.platform)
     }));
@@ -799,12 +847,16 @@ class CommisionsfinderPopup {
           weight: 0.3 // Second priority
         },
         {
+          name: 'profileTagSearch',
+          weight: 0.25 // Deterministic profile tags and aliases
+        },
+        {
           name: 'bio',
-          weight: 0.15 // Third priority  
+          weight: 0.12 // Profile text
         },
         {
           name: 'triggers',
-          weight: 0.1 // Fourth priority
+          weight: 0.08 // Commission detection snippets
         },
         {
           name: 'platformName',
@@ -853,11 +905,13 @@ class CommisionsfinderPopup {
     
     // Extract items from Fuse.js results and restore original data structure
     const items = searchResults.map(result => {
-      // Get the original item from currentResults to avoid using modified search data
-      const originalItem = this.currentResults.find(item => 
-        item.username === result.item.username && 
-        item.platform === result.item.platform
-      );
+      // Use captured index first; fall back to key lookup for older data.
+      const originalItem = Number.isInteger(result.item.__resultIndex)
+        ? this.currentResults[result.item.__resultIndex]
+        : this.currentResults.find(item =>
+            item.username === result.item.username &&
+            item.platform === result.item.platform
+          );
       
       return {
         ...(originalItem || result.item), // Use original if found, fallback to search item
@@ -1185,6 +1239,7 @@ class CommisionsfinderPopup {
     const timeAgo = this.formatTimeAgo(result.lastUpdated);
     const platformIconPaths = this.getPlatformIcons(result);
     const platformNames = this.formatPlatformNames(result);
+    const profileTagsHtml = this.getProfileTagsHtml(result);
     
     // Create platform icon HTML
     let platformIconsHtml = '';
@@ -1241,6 +1296,7 @@ class CommisionsfinderPopup {
         <div class="result-triggers" title="${triggers}">
           ${hasTriggers ? `"${triggers}"<br><span class="detection-time">detected ${timeAgo}</span>` : triggers}
         </div>
+        ${profileTagsHtml}
         ${result.platforms && result.platforms.length > 1 ? this.createPlatformDropdown(result) : ''}
       </div>
       <div class="result-confidence">
