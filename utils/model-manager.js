@@ -51,7 +51,7 @@ const QUANTIZATIONS = {
 };
 
 // Current quantization (default to fp16 for better performance)
-let currentQuantization = 'fp16';
+let currentQuantization = 'int8';
 
 /**
  * Sets the current quantization to use
