@@ -121,7 +121,7 @@ class CommisionsfinderPopup {
     this.modelSelector = document.getElementById('modelSelector');
     this.modelTemperature = document.getElementById('modelTemperature');
     this.temperatureValue = document.getElementById('temperatureValue');
-    this.clearAllData = document.getElementById('clearAllData');
+    this.clearAllDataBtn = document.getElementById('clearAllData');
     this.debugMode = document.getElementById('debugMode');
     this.zenMode = document.getElementById('zenMode');
     this.demoMode = document.getElementById('demoMode');
@@ -202,7 +202,7 @@ class CommisionsfinderPopup {
       this.temperatureValue.textContent = this.modelTemperature.value;
       this.updateTemperature(parseFloat(this.modelTemperature.value));
     });
-    this.clearAllData.addEventListener('click', () => this.clearAllData());
+    this.clearAllDataBtn.addEventListener('click', () => this.clearAllData());
     this.debugMode.addEventListener('change', () => this.updateDebugMode());
     this.zenMode.addEventListener('change', () => this.updateZenMode());
     this.demoMode.addEventListener('change', () => this.updateDemoMode());
@@ -2393,10 +2393,31 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
         const { BenchmarkRunner } = await import('/benchmark.js');
         const runner = new BenchmarkRunner();
 
-        const results = await runner.runBenchmark((message, progress) => {
+        const report = await runner.runFullScanBenchmark((message, progress) => {
             this.benchmarkProgress.querySelector('.benchmark-progress-fill').style.width = `${progress}%`;
             this.benchmarkProgress.querySelector('.benchmark-text').textContent = message;
         });
+        const results = [];
+        for (const [platform, platformResults] of Object.entries(report.platformResults || {})) {
+            results.push({
+                platform: platform.charAt(0).toUpperCase() + platform.slice(1),
+                step: `Total: ${platformResults.profileCount || 0} profiles scanned`,
+                profileCount: platformResults.profileCount || 0,
+                totalTime: platformResults.totalTimeSeconds || 0,
+                isHeader: true
+            });
+            for (const step of platformResults.steps || []) {
+                results.push({
+                    platform: platform.charAt(0).toUpperCase() + platform.slice(1),
+                    step: step.step,
+                    totalSeconds: step.totalSeconds || 0,
+                    averageMs: step.averageMs || 0,
+                    count: step.count || 0,
+                    percentage: step.percentage || 0,
+                    isHeader: false
+                });
+            }
+        }
 
         // Create table header
         const headerRow = document.createElement('tr');
@@ -2410,6 +2431,18 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
             <th>% of Total</th>
         `;
         this.benchmarkTable.appendChild(headerRow);
+
+        const summaryRow = document.createElement('tr');
+        summaryRow.style.fontWeight = 'bold';
+        summaryRow.style.backgroundColor = '#111827';
+        summaryRow.innerHTML = `
+            <td>Full Scan</td>
+            <td colspan="2">Wall clock time</td>
+            <td>${report.run.resultCount}</td>
+            <td>${report.run.wallClockSeconds.toFixed(2)}s</td>
+            <td colspan="2">Report downloaded</td>
+        `;
+        this.benchmarkTable.appendChild(summaryRow);
 
         // Add results rows
         results.forEach(result => {

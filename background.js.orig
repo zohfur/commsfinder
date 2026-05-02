@@ -2,8 +2,6 @@
 import { getExecutionContext, debugLog } from './utils/shared.js';
 import { isModelCached, downloadAndCacheModel, setCurrentQuantization, getCurrentQuantization } from './utils/model-manager.js';
 import { AIAnalyzer } from './utils/ai-analyzer.js';
-import { classifyProfileTags } from './utils/tag-classifier.js';
-import { classifyProfileTagsFromE621 } from './utils/e621-tagger.js';
 
 // AI Analyzer instance
 let aiAnalyzer = null;
@@ -67,246 +65,6 @@ async function handleDebugModeUpdate(debugMode) {
 
 // Track active scan tabs
 let activeScanTabs = new Map();
-
-// ---------------------------------------------------------------------------
-// Scan-session in-memory cache
-// Eliminates per-artist full storage read/write during active scans.
-// ---------------------------------------------------------------------------
-
-/**
- * Live state during an active scan.  Null when no scan is running.
- * @type {{
- *   results: Array,
- *   exactMap: Map<string, number>,   // "${platform}:${normalizedUsername}" → results index
- *   normNameMap: Map<string, number> // normalizedUsername → results index (cross-platform)
- * } | null}
- */
-let scanCache = null;
-
-/** Number of artists added since the last storage flush. */
-let pendingWriteCount = 0;
-
-/** Flush to storage every N artists regardless of debounce. */
-const WRITE_BATCH_SIZE = 10;
-
-/** Debounce handle for deferred storage writes. */
-let pendingWriteTimer = null;
-const WRITE_DEBOUNCE_MS = 3000;
-
-/** Throttle handle for RESULTS_UPDATED messages to popup. */
-let pendingResultsUpdateTimer = null;
-const RESULTS_UPDATE_THROTTLE_MS = 2000;
-
-/** Per-platform timer handles for progress-write throttling. */
-const progressThrottleTimers = {};
-const PROGRESS_THROTTLE_MS = 2000;
-
-/** Pending (most-recent) progress data awaiting the next throttled flush. */
-const pendingProgressData = {};
-
-const BENCHMARK_PLATFORMS = ['furaffinity', 'bluesky'];
-
-/**
- * Build the fast-lookup Maps from a results array.
- * @param {Array} results
- * @returns {{ exactMap: Map, normNameMap: Map }}
- */
-function buildLookupMaps(results) {
-  const exactMap = new Map();
-  const normNameMap = new Map();
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    const normUser = normalizeString(r.username);
-    // Exact same-platform key
-    const primaryPlatform = r.platform;
-    exactMap.set(`${primaryPlatform}:${normUser}`, i);
-    // Also index every additional platform this artist appears on
-    if (r.platforms) {
-      for (const p of r.platforms) {
-        exactMap.set(`${p}:${normUser}`, i);
-      }
-    }
-    // Cross-platform name key (first writer wins; good enough for lookups)
-    if (!normNameMap.has(normUser)) {
-      normNameMap.set(normUser, i);
-    }
-    // Also index display name
-    const normDisplay = normalizeString(r.displayName);
-    if (normDisplay && !normNameMap.has(normDisplay)) {
-      normNameMap.set(normDisplay, i);
-    }
-  }
-  return { exactMap, normNameMap };
-}
-
-/**
- * Initialise the in-memory scan cache from an existing results array.
- * Call once at scan start, after loading the stored results.
- * @param {Array} existingResults
- */
-function initScanCache(existingResults) {
-  const results = existingResults ? [...existingResults] : [];
-  const { exactMap, normNameMap } = buildLookupMaps(results);
-  scanCache = { results, exactMap, normNameMap };
-  pendingWriteCount = 0;
-}
-
-/**
- * Flush the in-memory cache to chrome.storage.local.
- * Idempotent – safe to call even when scanCache is null.
- */
-async function flushScanCacheToStorage() {
-  if (!scanCache) return;
-  clearTimeout(pendingWriteTimer);
-  pendingWriteTimer = null;
-  pendingWriteCount = 0;
-  await chrome.storage.local.set({ scanResults: scanCache.results });
-}
-
-/**
- * Schedule a deferred storage flush.  Flushes immediately if we've hit
- * WRITE_BATCH_SIZE writes without a flush.
- */
-function scheduleScanCacheFlush() {
-  pendingWriteCount++;
-  if (pendingWriteCount >= WRITE_BATCH_SIZE) {
-    // Flush now (fire-and-forget; errors logged inside)
-    flushScanCacheToStorage().catch(err =>
-      console.error('[Background] Batched storage flush error:', err)
-    );
-    return;
-  }
-  // Debounced fallback flush
-  clearTimeout(pendingWriteTimer);
-  pendingWriteTimer = setTimeout(() => {
-    flushScanCacheToStorage().catch(err =>
-      console.error('[Background] Debounced storage flush error:', err)
-    );
-  }, WRITE_DEBOUNCE_MS);
-}
-
-/**
- * Send a throttled RESULTS_UPDATED message to the popup.
- * At most one message every RESULTS_UPDATE_THROTTLE_MS.
- */
-function scheduleResultsUpdate() {
-  if (pendingResultsUpdateTimer) return; // already scheduled
-  pendingResultsUpdateTimer = setTimeout(() => {
-    pendingResultsUpdateTimer = null;
-    if (!scanCache) return;
-    chrome.runtime.sendMessage({
-      type: 'RESULTS_UPDATED',
-      data: scanCache.results
-    }).catch(() => {});
-  }, RESULTS_UPDATE_THROTTLE_MS);
-}
-
-/**
- * Flush any pending throttled RESULTS_UPDATED immediately and cancel the timer.
- */
-function flushResultsUpdate() {
-  if (pendingResultsUpdateTimer) {
-    clearTimeout(pendingResultsUpdateTimer);
-    pendingResultsUpdateTimer = null;
-  }
-  if (!scanCache) return;
-  chrome.runtime.sendMessage({
-    type: 'RESULTS_UPDATED',
-    data: scanCache.results
-  }).catch(() => {});
-}
-
-/**
- * Tear down the scan cache after a scan ends.
- * Ensures a final storage flush before clearing.
- */
-async function teardownScanCache() {
-  await flushScanCacheToStorage();
-  scanCache = null;
-  // Cancel any lingering timers
-  clearTimeout(pendingWriteTimer);
-  pendingWriteTimer = null;
-  if (pendingResultsUpdateTimer) {
-    clearTimeout(pendingResultsUpdateTimer);
-    pendingResultsUpdateTimer = null;
-  }
-  for (const platform of Object.keys(progressThrottleTimers)) {
-    clearTimeout(progressThrottleTimers[platform]);
-    delete progressThrottleTimers[platform];
-    delete pendingProgressData[platform];
-  }
-}
-
-/**
- * O(1) same-platform duplicate lookup against the scan cache.
- * Returns the index in scanCache.results, or -1.
- */
-function findExactDuplicateIndexInCache(artistData) {
-  const normUser = normalizeString(artistData.username);
-  const key = `${artistData.platform}:${normUser}`;
-  const idx = scanCache.exactMap.get(key);
-  return idx !== undefined ? idx : -1;
-}
-
-/**
- * O(1) cross-platform duplicate lookup (exact normalised username match).
- * Falls back to O(N) "contains" scan only when needed.
- * Returns the result object or undefined.
- */
-function findCrossplatformDuplicateInCache(newArtist) {
-  const normUser = normalizeString(newArtist.username);
-  const normDisplay = normalizeString(newArtist.displayName);
-
-  // Fast path: exact normalised-username match in the cross-platform map
-  for (const key of [normUser, normDisplay]) {
-    if (!key) continue;
-    const idx = scanCache.normNameMap.get(key);
-    if (idx !== undefined) {
-      const existing = scanCache.results[idx];
-      // Confirm it is genuinely cross-platform
-      if (
-        existing.platform !== newArtist.platform &&
-        !(existing.platforms && existing.platforms.includes(newArtist.platform))
-      ) {
-        return existing;
-      }
-    }
-  }
-
-  // Slow path: substring/"contains" similarity (rare, only for fuzzy matches)
-  return scanCache.results.find(existing => {
-    if (
-      existing.platform === newArtist.platform ||
-      (existing.platforms && existing.platforms.includes(newArtist.platform))
-    ) return false;
-    return areNamesSimilar(existing.username, newArtist.username) ||
-           areNamesSimilar(existing.displayName, newArtist.displayName);
-  });
-}
-
-/**
- * Update the fast-lookup Maps after inserting/replacing an entry.
- * @param {number} idx  Index in scanCache.results that was inserted or updated.
- */
-function updateLookupMaps(idx) {
-  const r = scanCache.results[idx];
-  const normUser = normalizeString(r.username);
-  const normDisplay = normalizeString(r.displayName);
-
-  const primaryPlatform = r.platform;
-  scanCache.exactMap.set(`${primaryPlatform}:${normUser}`, idx);
-  if (r.platforms) {
-    for (const p of r.platforms) {
-      scanCache.exactMap.set(`${p}:${normUser}`, idx);
-    }
-  }
-  if (!scanCache.normNameMap.has(normUser)) {
-    scanCache.normNameMap.set(normUser, idx);
-  }
-  if (normDisplay && !scanCache.normNameMap.has(normDisplay)) {
-    scanCache.normNameMap.set(normDisplay, idx);
-  }
-}
 
 // Initialize on startup - restore active scan state if needed
 async function initializeActiveScanState() {
@@ -439,11 +197,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       handleScanRequest(request.platforms, sendResponse);
       return true; // Keep message channel open for async response
     }
-
-    if (request.type === 'BENCHMARK_SCAN_REQUEST') {
-      handleBenchmarkScanRequest(request, sendResponse);
-      return true;
-    }
       
     if (request.type === 'ARTIST_FOUND') {
       handleArtistFound(request.data);
@@ -497,22 +250,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'UPDATE_DEBUG_MODE') {
       handleDebugModeUpdate(request.debugMode);
       sendResponse({ success: true });
-      return true;
-    }
-
-    if (request.type === 'BENCHMARK_RESULTS') {
-      handleBenchmarkResults(request.platform, request.results);
-      // No response needed for fire-and-forget messages
-      return false;
-    }
-
-    if (request.type === 'GET_BENCHMARK_RESULTS') {
-      getStoredBenchmarkResults(sendResponse);
-      return true;
-    }
-
-    if (request.type === 'GET_BENCHMARK_RUN') {
-      getStoredBenchmarkRun(sendResponse);
       return true;
     }
 
@@ -793,22 +530,31 @@ async function handleAnalyzeRequest(request, sender, sendResponse) {
         result = patternAnalyze(request.text);
       }
     } else {
-      // AI mode - use analyzer once with timeout protection
+<<<<<<< Updated upstream
+      // AI mode - use the full AI analyzer
       const analyzer = await initializeAnalyzer();
-
+      
+      if (request.type === 'analyze_components') {
+        result = await analyzer.analyzeComponents(request.components);
+      } else {
+        result = await analyzer.analyze(request.text, request.context || 'bio');
+=======
+      // AI mode - use the full AI analyzer with timeout protection
+      const analyzer = await initializeAnalyzer();
+      
       // Add timeout protection to prevent service worker from being stopped
-      const analysisPromise = request.type === 'analyze_components'
+      const analysisPromise = request.type === 'analyze_components' 
         ? analyzer.analyzeComponents(request.components)
         : analyzer.analyze(request.text, request.context || 'bio');
-
+      
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Analysis timeout - exceeded 25 seconds')), 25000);
       });
-
+      
       try {
         result = await Promise.race([analysisPromise, timeoutPromise]);
       } catch (timeoutError) {
-        if (timeoutError?.message?.includes('timeout')) {
+        if (timeoutError.message.includes('timeout')) {
           console.warn('[Background] Analysis timed out, falling back to pattern matching');
           // Fallback to pattern matching if AI times out
           if (request.type === 'analyze_components') {
@@ -820,6 +566,7 @@ async function handleAnalyzeRequest(request, sender, sendResponse) {
         } else {
           throw timeoutError;
         }
+>>>>>>> Stashed changes
       }
     }
     
@@ -874,78 +621,11 @@ async function handleScanRequest(platforms, sendResponse) {
   }
 }
 
-async function handleBenchmarkScanRequest(request, sendResponse) {
-  try {
-    const { activeScansInProgress = false } = await chrome.storage.local.get(['activeScansInProgress']);
-    if (activeScansInProgress) {
-      sendResponse({ success: false, error: 'Scan already in progress' });
-      return;
-    }
-
-    const platforms = Array.isArray(request.platforms) && request.platforms.length > 0
-      ? request.platforms.filter(platform => BENCHMARK_PLATFORMS.includes(platform))
-      : BENCHMARK_PLATFORMS;
-
-    if (platforms.length === 0) {
-      sendResponse({ success: false, error: 'No benchmarkable platforms selected' });
-      return;
-    }
-
-    const runId = `benchmark-${Date.now()}`;
-    const activeBenchmarkRun = {
-      id: runId,
-      label: request.label || 'current-working-tree',
-      baselineCommit: request.baselineCommit || null,
-      platforms,
-      startedAt: Date.now(),
-      userAgent: navigator.userAgent,
-      manifestVersion: chrome.runtime.getManifest().version,
-    };
-
-    benchmarkResults = {};
-    await chrome.storage.local.remove([
-      'benchmarkResults',
-      'lastBenchmarkRun',
-      'platformProgress',
-      'lastPlatformScanned',
-      'furaffinity_progress',
-      'bluesky_progress',
-      'twitter_progress',
-      'furaffinity_error',
-      'bluesky_error',
-      'twitter_error',
-    ]);
-    await chrome.storage.local.set({
-      activeBenchmarkRun,
-      benchmarkResults,
-      scanResults: [],
-      completedPlatforms: [],
-      activePlatforms: [],
-      scanInProgress: false,
-      activeScansInProgress: false,
-    });
-
-    sendResponse({ success: true, runId, platforms });
-
-    initializeScan(platforms, { forceFresh: true, benchmarkRunId: runId }).catch(async error => {
-      console.error('Benchmark scan initialization failed:', error);
-      await finishBenchmarkRun('failed', [], error.message || String(error));
-      chrome.runtime.sendMessage({
-        type: 'BENCHMARK_SCAN_FAILED',
-        error: error.message || 'Failed to initialize benchmark scan',
-      }).catch(() => {});
-    });
-  } catch (error) {
-    console.error('Benchmark scan request failed:', error);
-    sendResponse({ success: false, error: error.message });
-  }
-}
-
 // New function to handle async scan initialization
-async function initializeScan(platforms, options = {}) {
+async function initializeScan(platforms) {
   try {
     // Get existing scan state
-    let { 
+    const { 
       scanInProgress = false, 
       lastPlatformScanned = null,
       scanResults = []
@@ -955,17 +635,12 @@ async function initializeScan(platforms, options = {}) {
       'scanResults'
     ]);
 
-    if (options.forceFresh) {
-      scanResults = [];
-    }
-
-    // Batch-read all platform progress in a single storage call
-    const progressKeys = platforms.map(p => `${p}_progress`);
-    const progressStorage = await chrome.storage.local.get(progressKeys);
-
+    // Get existing progress data
     const existingProgress = {};
     for (const platform of platforms) {
-      const platformProgressData = progressStorage[`${platform}_progress`];
+      const { [`${platform}_progress`]: platformProgressData } = 
+        await chrome.storage.local.get([`${platform}_progress`]);
+      
       if (platformProgressData && platformProgressData.phase !== 'completed') {
         if (platform === 'bluesky' && platformProgressData.following) {
           existingProgress[platform] = {
@@ -985,7 +660,7 @@ async function initializeScan(platforms, options = {}) {
     let platformsToScan = platforms;
     let isResuming = false;
     
-    if (!options.forceFresh && scanInProgress && lastPlatformScanned) {
+    if (scanInProgress && lastPlatformScanned) {
       const lastIndex = platforms.indexOf(lastPlatformScanned);
       if (lastIndex >= 0) {
         platformsToScan = platforms.slice(lastIndex);
@@ -994,13 +669,12 @@ async function initializeScan(platforms, options = {}) {
     }
 
     // Only clear results if this is a completely fresh scan
-    if (options.forceFresh || (!isResuming && !scanInProgress)) {
+    if (!isResuming && !scanInProgress) {
       await chrome.storage.local.set({ 
         scanInProgress: true,
         scanStartTime: Date.now(),
         lastPlatformScanned: null,
-        platformProgress: {},
-        ...(options.forceFresh ? { scanResults: [] } : {})
+        platformProgress: {}
       });
     }
 
@@ -1011,11 +685,6 @@ async function initializeScan(platforms, options = {}) {
       activePlatforms: platformsToScan,
       completedPlatforms: []
     });
-
-    // Bootstrap the in-memory scan cache from what's already stored.
-    // This is the single storage read for the whole scan; subsequent
-    // handleArtistFound calls work entirely in memory.
-    initScanCache(scanResults);
 
     // Check if model needs to be downloaded
     const { aiEnabled = true } = await chrome.storage.local.get(['aiEnabled']);
@@ -1078,7 +747,7 @@ async function initializeScan(platforms, options = {}) {
         await scanPlatform(
           platform === 'furaffinity' ? 'https://www.furaffinity.net/controls/favorites/' :
           platform === 'twitter' ? 'https://twitter.com/following' :
-          platform === 'bluesky' ? 'https://bsky.app' : '',
+          platform === 'bluesky' ? 'https://bsky.app/profile' : '',
           platform,
           platformProgress
         );
@@ -1097,16 +766,11 @@ async function initializeScan(platforms, options = {}) {
       console.error('[Background] Original error:', error.originalError);
     }
     
-    // Flush any partial results and tear down cache on error
-    await flushScanCacheToStorage().catch(() => {});
-    await teardownScanCache();
-
     // Clear active scan state on error
     await chrome.storage.local.set({ 
       activeScansInProgress: false,
       scanInProgress: false
     });
-    await finishBenchmarkRun('failed', [], errorMessage).catch(() => {});
     
     // Create enhanced error with more context
     const enhancedError = new Error(`Scan initialization failed: ${errorMessage}`);
@@ -1181,13 +845,10 @@ async function handleStopScan(sendResponse) {
           progressData[platform] = platformProgress;
         }
       } catch (error) {
-        console.warn(`Failed to get progress for ${platform} in tab ${tabId}:`, error);
+        console.warn(`Failed to get progress for ${platform}:`, error);
       }
     }
     
-    // Flush the in-memory scan cache before pausing
-    await flushScanCacheToStorage();
-
     // Store all progress data and mark scans as paused (not actively running)
     await chrome.storage.local.set({
       platformProgress: progressData,
@@ -1195,18 +856,6 @@ async function handleStopScan(sendResponse) {
       activeScansInProgress: false, // Clear active state since we're stopping
       // Keep activePlatforms and completedPlatforms for potential resumption
     });
-    
-    // Request benchmark results from content scripts before closing tabs
-    for (const [platform, tabId] of activeScanTabs) {
-      try {
-        // Send STOP_SCAN message to get benchmark results before closing
-        await chrome.tabs.sendMessage(tabId, { type: 'STOP_SCAN' });
-        // Give a small delay for the message to be processed
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } catch (error) {
-        console.warn(`Failed to send STOP_SCAN to ${platform} tab ${tabId}:`, error);
-      }
-    }
     
     // Close all active scan tabs
     for (const [platform, tabId] of activeScanTabs) {
@@ -1219,9 +868,6 @@ async function handleStopScan(sendResponse) {
     
     // Clear active tabs
     activeScanTabs.clear();
-
-    // Tear down the scan cache (keeps results in storage, clears timers)
-    await teardownScanCache();
     
     sendResponse({ success: true });
   } catch (error) {
@@ -1353,90 +999,38 @@ function mergePlatformData(baseArtist, additionalArtist) {
   return baseArtist;
 }
 
-function mergeProfileTagData(baseArtist, additionalArtist) {
-  const tagMap = new Map();
-
-  for (const sourceArtist of [baseArtist, additionalArtist]) {
-    for (const tag of sourceArtist.profileTags || []) {
-      if (!tagMap.has(tag.tag)) {
-        tagMap.set(tag.tag, {
-          ...tag,
-          aliases: [...(tag.aliases || [])],
-          matchedAliases: [...(tag.matchedAliases || [])],
-          sources: [...(tag.sources || [])],
-          impliedBy: [...(tag.impliedBy || [])],
-        });
-        continue;
-      }
-
-      const existing = tagMap.get(tag.tag);
-      existing.aliases = [...new Set([...existing.aliases, ...(tag.aliases || [])])];
-      existing.matchedAliases = [...new Set([...existing.matchedAliases, ...(tag.matchedAliases || [])])];
-      existing.sources = [...new Set([...existing.sources, ...(tag.sources || [])])];
-      existing.impliedBy = [...new Set([...existing.impliedBy, ...(tag.impliedBy || [])])];
-      existing.score = Math.max(existing.score || 0, tag.score || 0);
-    }
-  }
-
-  const profileTags = [...tagMap.values()]
-    .sort((a, b) => (b.score || 0) - (a.score || 0) || a.label.localeCompare(b.label));
-  const tagAliases = [...new Set([
-    ...(baseArtist.tagAliases || []),
-    ...(additionalArtist.tagAliases || []),
-    ...profileTags.flatMap(tag => [tag.tag, tag.label, ...(tag.aliases || [])]),
-  ])].filter(Boolean);
-
-  return {
-    ...baseArtist,
-    profileTags,
-    tagAliases,
-    tagSearchText: tagAliases.join(' '),
-    tagMatches: [
-      ...(baseArtist.tagMatches || []),
-      ...(additionalArtist.tagMatches || []),
-    ],
-    e621ArtistTag: baseArtist.e621ArtistTag || additionalArtist.e621ArtistTag,
-    e621PostCount: Math.max(baseArtist.e621PostCount || 0, additionalArtist.e621PostCount || 0),
-  };
-}
-
 async function handleArtistFound(artistData) {
   debugLog('Artist found:', artistData.username, 'on', artistData.platform);
   
   try {
-    // If no active scan cache exists (edge-case: message arrived before scan init),
-    // bootstrap the cache from storage so we never lose data.
-    if (!scanCache) {
-      const { scanResults: stored = [] } = await chrome.storage.local.get(['scanResults']);
-      initScanCache(stored);
-    }
-    const localTagClassification = classifyProfileTags(artistData);
-    const e621TagClassification = await classifyProfileTagsFromE621(artistData);
-    const tagClassification = e621TagClassification
-      ? mergeProfileTagData(localTagClassification, e621TagClassification)
-      : localTagClassification;
-
+    const { scanResults = [] } = await chrome.storage.local.get(['scanResults']);
+    
     // Include analysis data in the artist data
     const resultToStore = {
       ...artistData,
-      ...tagClassification,
       analysis: artistData.analysis || null,
       confidence: artistData.confidence,
       commissionStatus: artistData.commissionStatus,
       triggers: artistData.triggers,
       lastUpdated: Date.now()
     };
-
-    // --- O(1) exact same-platform duplicate check ---
-    const exactDuplicateIndex = findExactDuplicateIndexInCache(artistData);
-
+    
+    // Check for exact duplicates within the same platform first
+    const exactDuplicateIndex = scanResults.findIndex(
+      artist => artist.username === artistData.username && 
+                (artist.platform === artistData.platform || 
+                 (artist.platforms && artist.platforms.includes(artistData.platform)))
+    );
+    
     if (exactDuplicateIndex >= 0) {
-      debugLog('Found exact duplicate for same platform, updating if better confidence');
-      if (artistData.confidence > scanCache.results[exactDuplicateIndex].confidence) {
-        const existingPlatformData = scanCache.results[exactDuplicateIndex].platformData || {};
-        scanCache.results[exactDuplicateIndex] = {
+      console.log('Found exact duplicate for same platform, updating if better confidence');
+      // Update existing entry if this one has higher confidence
+      if (artistData.confidence > scanResults[exactDuplicateIndex].confidence) {
+        // Preserve platform data but update main fields
+        const existingPlatformData = scanResults[exactDuplicateIndex].platformData || {};
+        scanResults[exactDuplicateIndex] = {
           ...resultToStore,
-          platforms: scanCache.results[exactDuplicateIndex].platforms,
+          platforms: scanResults[exactDuplicateIndex].platforms,
           platformData: {
             ...existingPlatformData,
             [artistData.platform]: {
@@ -1452,53 +1046,58 @@ async function handleArtistFound(artistData) {
           }
         };
       }
-      const updatedArtist = scanCache.results[exactDuplicateIndex];
-      const tagMergedArtist = mergeProfileTagData(updatedArtist, resultToStore);
-      // Preserve platform merge fields explicitly to avoid accidental overwrite by tag merge logic.
-      scanCache.results[exactDuplicateIndex] = {
-        ...updatedArtist,
-        ...tagMergedArtist,
-        platforms: updatedArtist.platforms,
-        platformData: updatedArtist.platformData,
-      };
-      updateLookupMaps(exactDuplicateIndex);
     } else {
-      // --- O(1) fast-path cross-platform duplicate check ---
-      const crossPlatformDuplicate = findCrossplatformDuplicateInCache(resultToStore);
-
+      // Check for cross-platform duplicates
+      const crossPlatformDuplicate = findCrossplatformDuplicate(resultToStore, scanResults);
+      
       if (crossPlatformDuplicate) {
-        debugLog('Found cross-platform duplicate:', {
+        console.log('Found cross-platform duplicate:', {
           existing: { username: crossPlatformDuplicate.username, platform: crossPlatformDuplicate.platform },
           new: { username: resultToStore.username, platform: resultToStore.platform }
         });
-
+        
+        // Determine which artist data to use as the base
         const betterArtist = chooseBetterArtist(crossPlatformDuplicate, resultToStore);
         const additionalArtist = betterArtist === crossPlatformDuplicate ? resultToStore : crossPlatformDuplicate;
-
-        // The cross-platform duplicate is the object reference itself – find its index
-        const duplicateIndex = scanCache.results.indexOf(crossPlatformDuplicate);
-        const mergedArtist = mergeProfileTagData(
-          mergePlatformData({ ...betterArtist }, additionalArtist),
-          additionalArtist
-        );
-        scanCache.results[duplicateIndex] = mergedArtist;
-        updateLookupMaps(duplicateIndex);
+        
+        console.log('Chose better artist:', {
+          base: { username: betterArtist.username, platform: betterArtist.platform, status: betterArtist.commissionStatus, confidence: betterArtist.confidence },
+          additional: { username: additionalArtist.username, platform: additionalArtist.platform, status: additionalArtist.commissionStatus, confidence: additionalArtist.confidence }
+        });
+        
+        // Find the index of the duplicate to replace
+        const duplicateIndex = scanResults.findIndex(artist => artist === crossPlatformDuplicate);
+        
+        // Merge the platform data
+        const mergedArtist = mergePlatformData({ ...betterArtist }, additionalArtist);
+        
+        console.log('Merged artist data:', {
+          username: mergedArtist.username,
+          displayName: mergedArtist.displayName,
+          platforms: mergedArtist.platforms,
+          commissionStatus: mergedArtist.commissionStatus,
+          confidence: mergedArtist.confidence
+        });
+        
+        // Replace the existing entry with the merged data
+        scanResults[duplicateIndex] = mergedArtist;
       } else {
+        // No duplicates found, add as new artist
         debugLog('No duplicates found, adding new artist');
-        const newIndex = scanCache.results.length;
-        scanCache.results.push(resultToStore);
-        updateLookupMaps(newIndex);
+        scanResults.push(resultToStore);
       }
     }
-
-    debugLog('Cache size after update:', scanCache.results.length);
-
-    // Batched / debounced write – avoids per-artist full storage round-trips
-    scheduleScanCacheFlush();
-
-    // Throttled popup notification – avoids flooding the popup renderer
-    scheduleResultsUpdate();
-
+    
+    await chrome.storage.local.set({ scanResults });
+    
+    debugLog('Updated scan results, total artists:', scanResults.length);
+    
+    // Notify popup if it's open
+    chrome.runtime.sendMessage({
+      type: 'RESULTS_UPDATED',
+      data: scanResults
+    }).catch(() => {}); // Ignore if popup is closed
+    
   } catch (error) {
     console.error('Error handling found artist:', error);
   }
@@ -1541,64 +1140,73 @@ async function handleScanComplete(platform, results) {
       console.log('All scans complete - cleaning up and notifying');
       
       // Close any remaining scan tabs
-      for (const [remainingPlatform, remainingTabId] of activeScanTabs) {
+      for (const [platform, tabId] of activeScanTabs) {
         try {
-          await chrome.tabs.remove(remainingTabId);
+          await chrome.tabs.remove(tabId);
         } catch (error) {
-          console.warn(`Failed to close remaining tab for ${remainingPlatform}:`, error);
+          console.warn(`Failed to close remaining tab for ${platform}:`, error);
         }
       }
+      
+      // Clear active tabs map
       activeScanTabs.clear();
       
-      // Flush the in-memory cache to storage and get the final results
-      await flushScanCacheToStorage();
-      const finalResults = scanCache ? [...scanCache.results] : [];
-      await teardownScanCache();
-
+      // Get current scan results before clearing state
+      const { scanResults: currentResults = [] } = await chrome.storage.local.get(['scanResults']);
+      
       await chrome.storage.local.set({
         scanInProgress: false,
-        activeScansInProgress: false,
+        activeScansInProgress: false, // Clear active state
         lastScanDate: Date.now(),
         completedPlatforms: [],
-        activePlatforms: []
+        activePlatforms: [], // Clear active platforms list
+        scanResults: currentResults // Preserve the scan results
       });
       
       console.log('All scans complete');
-      await finishBenchmarkRun('completed', finalResults);
       
+      // Use the preserved results
+      const scanResults = currentResults;
+      
+      // Notify popup
       chrome.runtime.sendMessage({
         type: 'SCAN_FINISHED',
-        data: finalResults
+        data: scanResults
       }).catch(() => {});
     } else if (activePlatforms.length === 0) {
       // Fallback: if activePlatforms is empty, assume scan is complete
       console.log('No active platforms list found, assuming scan complete');
       
-      for (const [remainingPlatform, remainingTabId] of activeScanTabs) {
+      // Close any remaining scan tabs
+      for (const [platform, tabId] of activeScanTabs) {
         try {
-          await chrome.tabs.remove(remainingTabId);
+          await chrome.tabs.remove(tabId);
         } catch (error) {
-          console.warn(`Failed to close remaining tab for ${remainingPlatform}:`, error);
+          console.warn(`Failed to close remaining tab for ${platform}:`, error);
         }
       }
+      
+      // Clear active tabs map
       activeScanTabs.clear();
-
-      await flushScanCacheToStorage();
-      const finalResults = scanCache ? [...scanCache.results] : [];
-      await teardownScanCache();
-
+      
+      // Get current scan results before clearing state
+      const { scanResults: currentResults = [] } = await chrome.storage.local.get(['scanResults']);
+      
       await chrome.storage.local.set({
         scanInProgress: false,
         activeScansInProgress: false,
         lastScanDate: Date.now(),
-        completedPlatforms: []
+        completedPlatforms: [],
+        scanResults: currentResults // Preserve the scan results
       });
-
-      await finishBenchmarkRun('completed', finalResults);
       
+      // Use the preserved results
+      const scanResults = currentResults;
+      
+      // Notify popup
       chrome.runtime.sendMessage({
         type: 'SCAN_FINISHED',
-        data: finalResults
+        data: scanResults
       }).catch(() => {});
     }
     
@@ -1782,44 +1390,21 @@ async function handleQuantizationChange(quantizationType, sendResponse) {
   }
 }
 
-function stripProgressForPopup(progressData) {
-  if (!progressData || typeof progressData !== 'object') {
-    return progressData;
-  }
-
-  const popupProgress = { ...progressData };
-  // Large resume arrays are only needed for persistence/resume, not live UI.
-  delete popupProgress.artists;
-  delete popupProgress.following;
-  return popupProgress;
-}
-
-// Handle scan progress updates (throttled per platform to reduce storage spam)
-function handleScanProgress(platform, progressData) {
+// Handle scan progress updates
+async function handleScanProgress(platform, progressData) {
   debugLog(`[Background] Scan progress for ${platform}:`, progressData);
-
-  // Always forward to popup immediately (cheap runtime message, no storage)
+  
+  // Store progress data
+  await chrome.storage.local.set({
+    [`${platform}_progress`]: progressData
+  });
+  
+  // Forward to popup if open
   chrome.runtime.sendMessage({
     type: 'SCAN_PROGRESS_UPDATE',
     platform: platform,
-    data: stripProgressForPopup(progressData)
-  }).catch(() => {});
-
-  // Buffer the most-recent data and throttle the storage write
-  pendingProgressData[platform] = progressData;
-
-  if (progressThrottleTimers[platform]) return; // already scheduled
-
-  progressThrottleTimers[platform] = setTimeout(() => {
-    delete progressThrottleTimers[platform];
-    const latest = pendingProgressData[platform];
-    delete pendingProgressData[platform];
-    if (latest) {
-      chrome.storage.local.set({ [`${platform}_progress`]: latest }).catch(err =>
-        console.error(`[Background] Progress storage error for ${platform}:`, err)
-      );
-    }
-  }, PROGRESS_THROTTLE_MS);
+    data: progressData
+  }).catch(() => {}); // Ignore if popup is closed
 }
 
 // Handle scan errors
@@ -1864,19 +1449,16 @@ async function handleScanError(platform, errorMessage) {
       console.log('All scans complete (some with errors) - cleaning up and notifying');
       
       // Close any remaining scan tabs
-      for (const [errPlatform, errTabId] of activeScanTabs) {
+      for (const [platform, tabId] of activeScanTabs) {
         try {
-          await chrome.tabs.remove(errTabId);
-        } catch (tabErr) {
-          console.warn(`Failed to close remaining tab for ${errPlatform}:`, tabErr);
+          await chrome.tabs.remove(tabId);
+        } catch (error) {
+          console.warn(`Failed to close remaining tab for ${platform}:`, error);
         }
       }
+      
+      // Clear active tabs map
       activeScanTabs.clear();
-
-      // Flush cache before clearing state
-      await flushScanCacheToStorage();
-      const finalResults = scanCache ? [...scanCache.results] : [];
-      await teardownScanCache();
       
       await chrome.storage.local.set({
         scanInProgress: false,
@@ -1886,12 +1468,14 @@ async function handleScanError(platform, errorMessage) {
         activePlatforms: []
       });
       
+      // Get final results from storage
+      const { scanResults = [] } = await chrome.storage.local.get(['scanResults']);
+      
+      // Notify popup that scan finished (even with some errors)
       chrome.runtime.sendMessage({
         type: 'SCAN_FINISHED',
-        data: finalResults
+        data: scanResults
       }).catch(() => {});
-
-      await finishBenchmarkRun('completed_with_errors', finalResults, errorMessage);
     }
     
     // Notify popup of the specific error
@@ -1936,33 +1520,6 @@ async function handleTemperatureUpdate(temperature, sendResponse) {
   }
 }
 
-// Handle opening extension in a separate window
-async function handleOpenInWindow(sendResponse) {
-  try {
-    // Create a new popup window with the extension (twice the popup size)
-    const window = await chrome.windows.create({
-      url: chrome.runtime.getURL('popup/popup.html'),
-      type: 'popup',
-      width: 500,
-      height: 900,
-      focused: true
-    });
-    
-    if (isDebugMode) {
-      console.log('[Background] Created window with ID:', window.id);
-    }
-    
-    if (sendResponse) {
-      sendResponse({ success: true, windowId: window.id });
-    }
-  } catch (error) {
-    console.error('[Background] Error creating window:', error);
-    if (sendResponse) {
-      sendResponse({ success: false, error: error.message });
-    }
-  }
-}
-
 // Load the selected quantization at startup
 async function initializeSelectedQuantization() {
   try {
@@ -1978,106 +1535,6 @@ async function initializeSelectedQuantization() {
 
 // Initialize quantization on startup
 initializeSelectedQuantization();
-
-// Handle extension icon click - open in window instead of popup
-chrome.action.onClicked.addListener(async (tab) => {
-  if (isDebugMode) {
-    console.log('[Background] Extension icon clicked, opening window');
-  }
-  
-  // Open the extension in a window
-  await handleOpenInWindow();
-});
-
-// Store benchmark results
-let benchmarkResults = {};
-
-async function handleBenchmarkResults(platform, results) {
-  console.log(`[Background] Received benchmark results for ${platform}:`, results);
-  benchmarkResults[platform] = results;
-  
-  // Store in chrome.storage for persistence
-  await chrome.storage.local.set({ benchmarkResults });
-  
-  // Forward to popup if open
-  chrome.runtime.sendMessage({
-    type: 'BENCHMARK_RESULTS_UPDATE',
-    platform: platform,
-    results: results
-  }).catch(() => {}); // Ignore if popup is closed
-}
-
-async function finishBenchmarkRun(status, finalResults = [], error = null) {
-  const stored = await chrome.storage.local.get(['activeBenchmarkRun', 'benchmarkResults']);
-  const activeBenchmarkRun = stored.activeBenchmarkRun;
-  if (!activeBenchmarkRun) return null;
-
-  const finishedAt = Date.now();
-  const perPlatformResults = stored.benchmarkResults || benchmarkResults || {};
-  const lastBenchmarkRun = {
-    ...activeBenchmarkRun,
-    status,
-    error,
-    finishedAt,
-    wallClockMs: finishedAt - activeBenchmarkRun.startedAt,
-    wallClockSeconds: (finishedAt - activeBenchmarkRun.startedAt) / 1000,
-    resultCount: Array.isArray(finalResults) ? finalResults.length : 0,
-    benchmarkResults: perPlatformResults,
-    platformSummaries: Object.fromEntries(
-      Object.entries(perPlatformResults).map(([platform, result]) => [
-        platform,
-        {
-          profileCount: result?.profileCount || 0,
-          totalTimeMs: result?.totalTimeMs || 0,
-          totalTimeSeconds: result?.totalTimeSeconds || 0,
-          topSteps: Array.isArray(result?.steps) ? result.steps.slice(0, 8) : [],
-        },
-      ])
-    ),
-  };
-
-  await chrome.storage.local.remove(['activeBenchmarkRun']);
-  await chrome.storage.local.set({ lastBenchmarkRun });
-
-  chrome.runtime.sendMessage({
-    type: 'BENCHMARK_SCAN_FINISHED',
-    data: lastBenchmarkRun,
-  }).catch(() => {});
-
-  return lastBenchmarkRun;
-}
-
-async function getStoredBenchmarkResults(sendResponse) {
-  try {
-    const stored = await chrome.storage.local.get(['benchmarkResults', 'lastBenchmarkRun']);
-    sendResponse({
-      success: true,
-      results: stored.benchmarkResults || benchmarkResults,
-      run: stored.lastBenchmarkRun || null
-    });
-  } catch (error) {
-    console.error('Error getting benchmark results:', error);
-    sendResponse({
-      success: false,
-      error: error.message,
-      results: benchmarkResults
-    });
-  }
-}
-
-async function getStoredBenchmarkRun(sendResponse) {
-  try {
-    const stored = await chrome.storage.local.get(['lastBenchmarkRun', 'activeBenchmarkRun']);
-    sendResponse({
-      success: true,
-      run: stored.lastBenchmarkRun || null,
-      activeRun: stored.activeBenchmarkRun || null,
-    });
-  } catch (error) {
-    console.error('Error getting benchmark run:', error);
-    sendResponse({ success: false, error: error.message });
-  }
-}
 
 // Initialize debug mode when extension starts
 initDebugMode();

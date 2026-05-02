@@ -20,6 +20,7 @@
     "*://*.furaffinity.net/*",
     "*://*.twitter.com/*",
     "*://*.x.com/*",
+    "*://*.e621.net/*",
     "*://*.bsky.app/*",
     "*://*.huggingface.co/*",
     "*://*.xethub.hf.co/*"
@@ -61,6 +62,7 @@
         "*://*.furaffinity.net/*",
         "*://*.twitter.com/*",
         "*://*.x.com/*",
+        "*://*.e621.net/*",
         "*://*.bsky.app/*",
         "*://*.huggingface.co/*",
         "*://*.xethub.hf.co/*"
