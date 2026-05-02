@@ -1,7 +1,6 @@
 const E621_API_BASE_URL = 'https://e621.net';
-const E621_RATE_LIMIT_MS = 550;
 const E621_POSTS_PER_PAGE = 320;
-const E621_MAX_POST_PAGES = 20;
+const E621_MAX_POST_PAGES = 10;
 const E621_RELEVANT_TAG_LIMIT = 80;
 const E621_TAG_CATEGORIES = {
   general: 0,
@@ -15,6 +14,17 @@ const E621_TAG_CATEGORIES = {
 };
 const E621_RELEVANT_POST_TAG_FIELDS = ['general', 'species'];
 
+// e621 allows max 2 requests/second for anonymous clients; start at 1 req/s (1000ms)
+// and back off further on 503/429.
+const E621_MIN_RATE_LIMIT_MS = 1000;
+const E621_MAX_RATE_LIMIT_MS = 8000;
+const E621_BACKOFF_STEP_MS = 2000;
+const E621_RECOVERY_STEP_MS = 250;
+const E621_RECOVERY_SUCCESSES = 8;
+const E621_MAX_RETRIES = 4;
+
+let currentE621RateLimitMs = E621_MIN_RATE_LIMIT_MS;
+let e621ConsecutiveSuccesses = 0;
 let nextE621RequestAt = 0;
 const e621ArtistTagCache = new Map();
 
@@ -22,12 +32,26 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function increaseE621RateLimit(statusCode) {
+  e621ConsecutiveSuccesses = 0;
+  currentE621RateLimitMs = Math.min(currentE621RateLimitMs + E621_BACKOFF_STEP_MS, E621_MAX_RATE_LIMIT_MS);
+  console.warn(`[e621] Rate limited (${statusCode}), backing off to ${currentE621RateLimitMs}ms`);
+}
+
+function recordE621Success() {
+  e621ConsecutiveSuccesses++;
+  if (e621ConsecutiveSuccesses >= E621_RECOVERY_SUCCESSES && currentE621RateLimitMs > E621_MIN_RATE_LIMIT_MS) {
+    currentE621RateLimitMs = Math.max(currentE621RateLimitMs - E621_RECOVERY_STEP_MS, E621_MIN_RATE_LIMIT_MS);
+    e621ConsecutiveSuccesses = 0;
+  }
+}
+
 async function waitForE621RateLimit() {
   const now = Date.now();
   if (now < nextE621RequestAt) {
     await sleep(nextE621RequestAt - now);
   }
-  nextE621RequestAt = Date.now() + E621_RATE_LIMIT_MS;
+  nextE621RequestAt = Date.now() + currentE621RateLimitMs;
 }
 
 function normalizeE621TagName(value) {
@@ -137,24 +161,44 @@ async function fetchE621Json(path, params, options = {}) {
     throw new Error('Fetch is not available for e621 tag enrichment');
   }
 
-  await waitForE621RateLimit();
+  const maxRetries = options.maxRetries ?? E621_MAX_RETRIES;
 
-  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timeout = controller
-    ? setTimeout(() => controller.abort(), options.timeoutMs || 12000)
-    : null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    await waitForE621RateLimit();
 
-  try {
-    const response = await fetchImpl(buildE621Url(path, params), {
-      headers: { Accept: 'application/json' },
-      signal: controller?.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`e621 request failed with ${response.status}`);
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = controller
+      ? setTimeout(() => controller.abort(), options.timeoutMs || 15000)
+      : null;
+
+    try {
+      const response = await fetchImpl(buildE621Url(path, params), {
+        headers: { Accept: 'application/json' },
+        signal: controller?.signal,
+      });
+
+      if (response.status === 429 || response.status === 503) {
+        increaseE621RateLimit(response.status);
+        if (attempt < maxRetries) {
+          const retryAfterHeader = response.headers?.get?.('Retry-After');
+          const extraWait = retryAfterHeader
+            ? parseInt(retryAfterHeader, 10) * 1000
+            : currentE621RateLimitMs;
+          await sleep(extraWait);
+          continue;
+        }
+        throw new Error(`e621 rate limited (${response.status}) after ${attempt + 1} attempts`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`e621 request failed with ${response.status}`);
+      }
+
+      recordE621Success();
+      return await response.json();
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
-    return await response.json();
-  } finally {
-    if (timeout) clearTimeout(timeout);
   }
 }
 

@@ -41,6 +41,18 @@ export class PerformanceBenchmark {
         this.currentStepStart = performance.now();
     }
 
+    // Record an independently measured step without disturbing an active timer.
+    recordStep(stepName, duration) {
+        if (!this.isEnabled || !stepName || typeof duration !== 'number') return;
+
+        if (!this.steps.has(stepName)) {
+            this.steps.set(stepName, []);
+        }
+
+        this.steps.get(stepName).push(duration);
+        console.log(`[Benchmark] ${stepName}: ${duration.toFixed(2)}ms`);
+    }
+
     // End timing a step
     endStep() {
         if (!this.isEnabled) {

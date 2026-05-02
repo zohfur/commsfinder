@@ -115,7 +115,11 @@ function updateProgressOverlay(phase, details = {}) {
 
 // Configuration
 const CONFIG = {
-    RATE_LIMIT_DELAY: 1000, // 1 second between requests
+    RATE_LIMIT_DELAY: 250, // Start aggressively; adaptive backoff handles refusals
+    MIN_RATE_LIMIT_DELAY: 250,
+    MAX_RATE_LIMIT_DELAY: 1000, // Back off to 1 second if Bluesky rate-limits us
+    RATE_LIMIT_RECOVERY_STEP: 250,
+    RATE_LIMIT_RECOVERY_SUCCESSES: 120,
     ERROR_RETRY_DELAY: 30000, // 30 seconds on error
     MAX_RETRIES: 3,
     MAX_POSTS_PER_USER: 5, // Limit posts to analyze per artist
@@ -123,6 +127,63 @@ const CONFIG = {
     API_BASE: 'https://public.api.bsky.app/xrpc',
     CACHE_TTL: 30 * 60 * 1000, // 30 minutes cache TTL
 };
+
+let currentRateLimitDelay = CONFIG.RATE_LIMIT_DELAY;
+let consecutiveSuccessfulRequests = 0;
+let isDebugMode = false;
+
+async function initializeDebugMode() {
+    if (!isExtensionContextValid()) return;
+
+    try {
+        const { debugMode = false } = await chrome.storage.local.get(['debugMode']);
+        isDebugMode = Boolean(debugMode);
+    } catch (error) {
+        console.warn('[Bluesky] Failed to read debug mode:', error);
+    }
+}
+
+function getBlueskyBenchmark() {
+    return getBenchmark('bluesky');
+}
+
+function recordBenchmarkStep(stepName, startTime) {
+    const benchmark = getBlueskyBenchmark();
+    if (benchmark?.recordStep) {
+        benchmark.recordStep(stepName, performance.now() - startTime);
+    }
+}
+
+async function measureBenchmarkStep(stepName, callback) {
+    const startTime = performance.now();
+    try {
+        return await callback();
+    } finally {
+        recordBenchmarkStep(stepName, startTime);
+    }
+}
+
+function increaseRateLimitDelay(reason) {
+    consecutiveSuccessfulRequests = 0;
+    if (currentRateLimitDelay < CONFIG.MAX_RATE_LIMIT_DELAY) {
+        currentRateLimitDelay = CONFIG.MAX_RATE_LIMIT_DELAY;
+        console.warn(`[Bluesky] Rate limit backoff raised to ${currentRateLimitDelay}ms (${reason})`);
+    }
+}
+
+function recordSuccessfulRequest() {
+    if (currentRateLimitDelay <= CONFIG.MIN_RATE_LIMIT_DELAY) return;
+
+    consecutiveSuccessfulRequests++;
+    if (consecutiveSuccessfulRequests < CONFIG.RATE_LIMIT_RECOVERY_SUCCESSES) return;
+
+    currentRateLimitDelay = Math.max(
+        CONFIG.MIN_RATE_LIMIT_DELAY,
+        currentRateLimitDelay - CONFIG.RATE_LIMIT_RECOVERY_STEP
+    );
+    consecutiveSuccessfulRequests = 0;
+    console.log(`[Bluesky] Rate limit delay recovered to ${currentRateLimitDelay}ms`);
+}
 
 // Request deduplication: track in-flight requests to avoid duplicates
 const activeRequests = new Map(); // URL → Promise
@@ -287,6 +348,14 @@ async function dedupeFetch(url, options = {}) {
 
     // Create new request promise
     const promise = fetch(url, options)
+        .then(response => {
+            if (response.status === 429) {
+                increaseRateLimitDelay('deduped fetch 429');
+            } else if (response.ok) {
+                recordSuccessfulRequest();
+            }
+            return response;
+        })
         .finally(() => {
             // Clean up when done
             activeRequests.delete(url);
@@ -298,71 +367,49 @@ async function dedupeFetch(url, options = {}) {
 
 // Get cached profile data if still valid (checks both memory and storage)
 async function getCachedProfile(userDid) {
-    // Ensure cache is initialized
-    if (!cacheInitialized) {
-        await initializeCache();
-    }
-    
-    // Check in-memory cache first (fastest)
-    const cached = profileCache.get(userDid);
-    if (cached && (Date.now() - cached.timestamp) < CONFIG.CACHE_TTL) {
-        console.log(`[Bluesky] Cache hit (memory) for profile: ${userDid}`);
-        return cached.data;
-    }
-    
-    // Remove expired cache entry from memory
-    if (cached) {
-        profileCache.delete(userDid);
-    }
-    
-    // If not in memory, try loading from storage (only if extension context is valid)
-    if (isExtensionContextValid()) {
-        try {
-            const result = await chrome.storage.local.get([CACHE_STORAGE_KEY]);
-            const storedCache = result[CACHE_STORAGE_KEY];
-            
-            if (storedCache && storedCache[userDid]) {
-                const storedEntry = storedCache[userDid];
-                const now = Date.now();
-                
-                if (storedEntry.timestamp && (now - storedEntry.timestamp) < CONFIG.CACHE_TTL) {
-                    // Load into memory cache for faster future access
-                    profileCache.set(userDid, storedEntry);
-                    console.log(`[Bluesky] Cache hit (storage) for profile: ${userDid}`);
-                    return storedEntry.data;
-                } else {
-                    // Expired - remove from storage
-                    delete storedCache[userDid];
-                    await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: storedCache });
-                }
-            }
-        } catch (error) {
-            console.warn('[Bluesky] Failed to check storage cache:', error);
-            // Continue - will fetch fresh data
+    return measureBenchmarkStep('Cache lookup', async () => {
+        // Ensure cache is initialized
+        if (!cacheInitialized) {
+            await initializeCache();
         }
-    }
-    
-    return null;
+
+        // Check in-memory cache first (fastest)
+        const cached = profileCache.get(userDid);
+        if (cached && (Date.now() - cached.timestamp) < CONFIG.CACHE_TTL) {
+            console.log(`[Bluesky] Cache hit (memory) for profile: ${userDid}`);
+            return cached.data;
+        }
+
+        // Remove expired cache entry from memory
+        if (cached) {
+            profileCache.delete(userDid);
+        }
+
+        // Persistent cache is bulk-loaded during initializeCache(); avoid per-profile storage reads here.
+        return null;
+    });
 }
 
 // Cache profile data (both memory and storage)
 async function cacheProfile(userDid, data) {
-    const entry = {
-        data: data,
-        timestamp: Date.now()
-    };
-    
-    // Update in-memory cache
-    profileCache.set(userDid, entry);
-    console.log(`[Bluesky] Cached profile data for: ${userDid}`);
-    
-    // Clean up old cache entries periodically (keep cache size reasonable)
-    if (profileCache.size > 1000) {
-        await cleanupExpiredCache();
-    }
-    
-    // Save to persistent storage (debounced - schedules save for 2 seconds later)
-    saveCacheToStorage();
+    return measureBenchmarkStep('Cache write/schedule', async () => {
+        const entry = {
+            data: data,
+            timestamp: Date.now()
+        };
+
+        // Update in-memory cache
+        profileCache.set(userDid, entry);
+        console.log(`[Bluesky] Cached profile data for: ${userDid}`);
+
+        // Clean up old cache entries periodically (keep cache size reasonable)
+        if (profileCache.size > 1000) {
+            await cleanupExpiredCache();
+        }
+
+        // Save to persistent storage (debounced - schedules save for 2 seconds later)
+        saveCacheToStorage();
+    });
 }
 
 // Progress tracking (same structure as FurAffinity)
@@ -382,8 +429,15 @@ class ProgressTracker {
         this.following = null; // Store the full following list
     }
 
-    update(data) {
+    update(data, options = {}) {
         Object.assign(this, data);
+        const isDetailUpdate = options.detail ||
+            (!('phase' in data) && !('completed' in data) && (('subTask' in data) || ('subProgress' in data)));
+
+        if (!isDebugMode && isDetailUpdate && !options.force) {
+            return;
+        }
+
         this.queueUpdate();
     }
 
@@ -408,6 +462,7 @@ class ProgressTracker {
     }
 
     sendUpdate() {
+        const benchmarkStart = performance.now();
         try {
             let overallPercentage = 0;
             if (this.total > 0) {
@@ -455,6 +510,8 @@ class ProgressTracker {
             }
         } catch (error) {
             console.error('[Bluesky] Error in sendUpdate:', error);
+        } finally {
+            recordBenchmarkStep('Progress update/send', benchmarkStart);
         }
     }
 }
@@ -476,13 +533,13 @@ async function delay(ms) {
 }
 
 async function rateLimitedDelay() {
-    await delay(CONFIG.RATE_LIMIT_DELAY);
+    await measureBenchmarkStep('Rate limit delay', () => delay(currentRateLimitDelay));
 }
 
 async function errorDelay() {
-    progress.update({ rateLimited: true });
-    await delay(CONFIG.ERROR_RETRY_DELAY);
-    progress.update({ rateLimited: false });
+    progress.update({ rateLimited: true }, { force: true });
+    await measureBenchmarkStep('Error retry delay', () => delay(CONFIG.ERROR_RETRY_DELAY));
+    progress.update({ rateLimited: false }, { force: true });
 }
 
 // Check if user is authenticated by trying to get their profile
@@ -497,6 +554,7 @@ async function checkAuthStatus() {
         // Verify we can access their profile
         const response = await fetch(`${CONFIG.API_BASE}/app.bsky.actor.getProfile?actor=${userHandle}`);
         if (response.ok) {
+            recordSuccessfulRequest();
             const profile = await response.json();
             return { 
                 isAuthenticated: true, 
@@ -504,6 +562,10 @@ async function checkAuthStatus() {
                 did: profile.did,
                 displayName: profile.displayName
             };
+        }
+
+        if (response.status === 429) {
+            increaseRateLimitDelay('auth 429');
         }
         
         return { isAuthenticated: false, handle: null };
@@ -586,15 +648,18 @@ async function getFollowingList(userDid) {
                 url += `&cursor=${cursor}`;
             }
             
-            const response = await fetch(url);
+            const response = await measureBenchmarkStep('Following list fetch', () => fetch(url));
             if (!response.ok) {
                 if (response.status === 429) {
                     console.warn('[Bluesky] Rate limited, waiting...');
+                    increaseRateLimitDelay('following list 429');
                     await errorDelay();
                     continue;
                 }
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
+
+            recordSuccessfulRequest();
             
             const data = await response.json();
             console.log(`[Bluesky] Got ${data.follows.length} follows from page ${pageCount + 1}`);
@@ -603,7 +668,7 @@ async function getFollowingList(userDid) {
             cursor = data.cursor;
             pageCount++;
             
-            await rateLimitedDelay();
+            await measureBenchmarkStep('Following list rate limit delay', () => delay(currentRateLimitDelay));
             
         } while (cursor && pageCount < maxPages);
         
@@ -635,7 +700,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 currentArtist: userHandle,
                 subTask: 'Fetching profile',
                 subProgress: 10
-            });
+            }, { detail: true });
 
             benchmark.startStep('Parallel fetch profile and posts');
             
@@ -652,6 +717,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
             if (!profileResponse.ok || !postsResponse.ok) {
                 benchmark.endStep();
                 if (profileResponse.status === 429 || postsResponse.status === 429) {
+                    increaseRateLimitDelay('profile/posts 429');
                     await errorDelay();
                     continue;
                 }
@@ -671,7 +737,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 currentArtist: userHandle,
                 subTask: 'Processing posts',
                 subProgress: 50
-            });
+            }, { detail: true });
 
             benchmark.startStep('Processing posts');
             // Process posts to extract relevant data
@@ -686,7 +752,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                     currentArtist: userHandle,
                     subTask: 'Fetching pinned post',
                     subProgress: 70
-                });
+                }, { detail: true });
 
                 benchmark.startStep('Fetching pinned post');
                 pinnedPost = await fetchPinnedPost(profile.pinnedPost.uri);
@@ -707,7 +773,7 @@ async function getUserProfileAndPosts(userDid, userHandle) {
                 currentArtist: userHandle,
                 subTask: 'Analyzing content',
                 subProgress: 80
-            });
+            }, { detail: true });
             
             benchmark.startStep('Formatting data for analysis');
             // Get most recent non-pinned post
@@ -802,6 +868,9 @@ async function fetchPinnedPost(postUri) {
         
         if (!response.ok) {
             console.error(`[Bluesky] Failed to fetch pinned post: HTTP ${response.status}`);
+            if (response.status === 429) {
+                increaseRateLimitDelay('pinned post 429');
+            }
             return null;
         }
         
@@ -892,20 +961,22 @@ function formatDataForAnalysis(artistData) {
 // Main scanning function
 async function scanBluesky(existingProgress = null) {
     console.log('[Bluesky] Starting Bluesky scan...', existingProgress ? 'Resuming from saved progress' : 'Fresh scan');
-    
-    // Initialize cache from storage
-    await initializeCache();
-    
+
     // Enable benchmarking
     const benchmark = enableBenchmark('bluesky');
     benchmark.reset();
+
+    await measureBenchmarkStep('Initialize debug mode', initializeDebugMode);
+
+    // Initialize cache from storage
+    await measureBenchmarkStep('Initialize cache', initializeCache);
     
     createProgressOverlay();
     updateProgressOverlay('show');
     
     // Check authentication
-    progress.update({ phase: 'checking_auth' });
-    const authStatus = await checkAuthStatus();
+    progress.update({ phase: 'checking_auth' }, { force: true });
+    const authStatus = await measureBenchmarkStep('Check authentication', checkAuthStatus);
     
     if (!authStatus.isAuthenticated) {
         console.warn('[Bluesky] User not authenticated to Bluesky');
@@ -941,17 +1012,17 @@ async function scanBluesky(existingProgress = null) {
                 total: following.length,
                 completed: startIndex,
                 currentArtist: startIndex < following.length ? following[startIndex].handle : null
-            });
+            }, { force: true });
         } else {
             // Get following list
-            progress.update({ phase: 'gathering_following' });
+            progress.update({ phase: 'gathering_following' }, { force: true });
             updateProgressOverlay('gathering_following', { source: 'Fetching following list...' });
             
             following = await getFollowingList(authStatus.did);
             console.log(`[Bluesky] Found ${following.length} users to scan`);
             
             // Sort following list using black magic fuckery
-            following = [...following].sort((a, b) => {
+            following = await measureBenchmarkStep('Sort following list', async () => [...following].sort((a, b) => {
                 const aHasDesc = a.description ? 1 : 0;
                 const bHasDesc = b.description ? 1 : 0;
                 if (aHasDesc !== bHasDesc) return bHasDesc - aHasDesc;
@@ -961,35 +1032,40 @@ async function scanBluesky(existingProgress = null) {
                 const aFollowers = a.followersCount || 0;
                 const bFollowers = b.followersCount || 0;
                 return bFollowers - aFollowers;
-            });
+            }));
             
             progress.update({
                 phase: 'scanning_artists',
                 total: following.length,
                 completed: 0
-            });
+            }, { force: true });
         }
         
         // Scan each user, starting from the saved index
         for (let i = startIndex; i < following.length; i++) {
             const user = following[i];
             
-            progress.update({
-                currentArtist: user.handle,
-                completed: i,
-                following: following // Store following list in progress
+            await measureBenchmarkStep('Loop progress update', async () => {
+                progress.update({
+                    currentArtist: user.handle,
+                    completed: i,
+                    subTask: null,
+                    subProgress: 0,
+                    following: following // Store following list in progress
+                }, { force: true });
             });
             
             const artistData = await getUserProfileAndPosts(user.did, user.handle);
             
             if (artistData) {
+                benchmark.incrementProfileCount();
                 // Send to AI analyzer
-                const analysisRequest = {
+                const analysisRequest = await measureBenchmarkStep('Preparing analysis request', async () => ({
                     type: 'analyze_components',
                     components: formatDataForAnalysis(artistData),
                     context: 'bluesky_profile',
                     metadata: artistData
-                };
+                }));
                 
                 console.log('[Bluesky] Sending analysis request:', analysisRequest);
 
@@ -1007,11 +1083,13 @@ async function scanBluesky(existingProgress = null) {
                         
                         // Report found artist
                         if (isExtensionContextValid()) {
-                            chrome.runtime.sendMessage({
-                                type: 'ARTIST_FOUND',
-                                data: result
-                            }).catch(error => {
-                                console.warn('[Bluesky] Failed to send artist found message:', error);
+                            await measureBenchmarkStep('ARTIST_FOUND dispatch', async () => {
+                                await chrome.runtime.sendMessage({
+                                    type: 'ARTIST_FOUND',
+                                    data: result
+                                }).catch(error => {
+                                    console.warn('[Bluesky] Failed to send artist found message:', error);
+                                });
                             });
                         }
                     }
@@ -1032,7 +1110,7 @@ async function scanBluesky(existingProgress = null) {
             phase: 'completed',
             completed: following.length,
             total: following.length
-        });
+        }, { force: true });
         
         // Send benchmark results
         if (benchmark) {
@@ -1391,7 +1469,9 @@ async function sendAnalysisRequestWithRetry(analysisRequest, artistData, maxRetr
             if (!isConnectionError && attempt < maxRetries) {
                 const delay = 2000; // Fixed 2 second delay
                 console.log(`[Bluesky] Retrying in ${delay}ms...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
+                await measureBenchmarkStep('Analysis retry delay', () =>
+                    new Promise(resolve => setTimeout(resolve, delay))
+                );
             }
         }
     }
