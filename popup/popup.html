@@ -67,7 +67,7 @@
 
       <!-- Model Status Section -->
       <section class="model-status-section" id="modelStatusSection" style="display: none;">
-        <h3 class="section-title">AI Model Status</h3>
+        <h3 class="section-title">Discriminative Model Status</h3>
         <p class="model-info">Using: DistilBERT Commissions (Fine-tuned)</p>
         <div class="model-status" id="modelStatus">
             <span id="modelStatusText">Model not downloaded.</span>
@@ -123,15 +123,23 @@
           </select>
         </div>
         
-        <div class="results-filter" style="margin-top: 8px; position: relative;">
-          <input type="text" id="searchFilter" class="search-input" placeholder="Search by artist name, username, bio..." style="width: 100%; padding: 8px 32px 8px 12px; border: 1px solid #374151; border-radius: 6px; background: #1f2937; color: #e5e7eb; font-size: 13px;">
-          <button id="clearSearchBtn" class="clear-search-btn" title="Clear search" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #6b7280; cursor: pointer; font-size: 16px; padding: 2px;">×</button>
+        <div class="results-filter search-filter-row">
+          <div class="search-chip-input" id="searchChipInput">
+            <div class="search-chips" id="searchChips"></div>
+            <input type="text" id="searchFilter" class="search-input" placeholder="Tags: goo -hypnosis ~werewolf, wildcards goo*, filters score:>30, order:score">
+            <button id="clearSearchBtn" class="clear-search-btn" title="Clear search">×</button>
+          </div>
+          <div class="tag-autocomplete" id="searchAutocomplete" style="display: none;"></div>
         </div>
         
-        <div class="results-filter" style="margin-top: 8px;">
+        <div class="results-filter tag-toggle-row" style="margin-top: 8px;">
           <label class="toggle-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
             <input type="checkbox" id="showBlacklisted" style="cursor: pointer;">
             <span>Show Blacklisted Artists</span>
+          </label>
+          <label class="toggle-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="showGeneralTags" style="cursor: pointer;">
+            <span>Show General Tags</span>
           </label>
         </div>
 
@@ -161,8 +169,8 @@
           Scan your followed artists across social media to find who has open commission slots.
         </p>
         <ul class="empty-features">
-          <li>✨ AI-powered detection</li>
-          <li>🔍 Pattern recognition</li>
+          <li>✨ Discriminative analysis</li>
+          <li>🔍 Regex pattern recognition</li>
           <li>📊 Confidence scoring</li>
           <li>🚀 Multi-platform support</li>
         </ul>
@@ -310,7 +318,7 @@
             <h2>Important Notice</h2>
           </div>
           <div class="disclaimer-body">
-            <p class="disclaimer-text">This extension uses <strong>discriminative</strong> AI.</p>
+            <p class="disclaimer-text">This extension uses <strong>discriminative</strong> analysis.</p>
             <p class="disclaimer-text">Think image and pattern recognition, NOT generative AI.</p>
           </div>
           <div class="disclaimer-actions">
@@ -346,11 +354,11 @@
           <div class="setting-group">
             <label class="setting-label">
               <input type="checkbox" id="aiEnabled">
-              Enable AI Analysis
+              Enable Discriminative Analysis
             </label>
             <p class="setting-description">
-              <strong>AI Mode (ON):</strong> Uses a fine-tuned DistilBERT model for intelligent commission detection with nuanced understanding.<br>
-              <strong>No-AI Mode (OFF):</strong> Uses regex pattern matching to detect specific phrases like "commissions open", "comms closed", etc. Faster but less accurate.
+              <strong>Discriminative Mode (ON):</strong> Uses a fine-tuned DistilBERT model for intelligent commission detection with nuanced understanding.<br>
+              <strong>Regex Mode (OFF):</strong> Uses regex pattern matching to detect specific phrases like "commissions open", "comms closed", etc. Faster but less accurate.
             </p>
           </div>
           

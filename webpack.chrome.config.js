@@ -49,6 +49,7 @@ module.exports = {
         { from: 'icons', to: 'icons' },
         { from: 'logos', to: 'logos' },
         { from: 'popup', to: 'popup' },
+        { from: 'e621-embeddings', to: 'e621-embeddings' },
         { from: 'manifest.chrome.json', to: 'manifest.json' },
         { from: 'node_modules/onnxruntime-web/dist', to: 'onnxruntime-web',
           globOptions: {

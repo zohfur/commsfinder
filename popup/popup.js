@@ -1,5 +1,23 @@
+/* global Fuse */
 // Popup JavaScript for Commsfinder extension
 console.log('Commsfinder popup loaded');
+
+const E621_TAG_ALIASES = {
+  'goo_(disambiguation)': 'goo',
+  goo_disambiguation: 'goo',
+  hypno: 'hypnosis',
+};
+
+const LOCAL_E621_TAG_SUGGESTIONS = [
+  'anthro',
+  'digital_art',
+  'goo',
+  'hypnosis',
+  'painting',
+  'traditional_art',
+  'transformation',
+  'werewolf',
+];
 
 class CommisionsfinderPopup {
   constructor() {
@@ -9,9 +27,18 @@ class CommisionsfinderPopup {
     this.favorites = new Set();
     this.blacklist = new Set();
     this.showBlacklisted = false;
+    this.showGeneralTags = false;
     this.searchInstance = null; // Fuse.js instance
     this.debugSearch = false; // Enable search debugging (toggle with window.popup.toggleSearchDebug())
     this.searchDebounceTimer = null; // For debounced search
+    this.searchTokens = [];
+    this.tagAutocompleteCache = new Map();
+    this.tagAutocompleteTimer = null;
+    this.e621EmbeddingsLoaded = false;
+    this.e621AliasMap = new Map(Object.entries(E621_TAG_ALIASES));
+    this.e621ImplicationMap = new Map();
+    this.e621Tags = [];
+    this.e621TagExpansionCache = new Map();
     this.promoHiddenForever = false; // Cache for promo hide forever preference
     this.promoHiddenUntil = null; // Cache for promo hide until timestamp
     this.feedbackHiddenForever = false; // Cache for feedback hide forever preference
@@ -66,8 +93,12 @@ class CommisionsfinderPopup {
     // Then load other data in parallel
     await Promise.all([
       this.loadResults(),
-      this.loadFavoritesAndBlacklist()
+      this.loadFavoritesAndBlacklist(),
+      this.loadE621Embeddings()
     ]);
+
+    this.searchInstance = null;
+    this.applyFilters();
     
     // Check model status and benchmark availability (non-blocking)
     this.checkModelStatus();
@@ -105,8 +136,12 @@ class CommisionsfinderPopup {
     this.confidenceFilter = document.getElementById('confidenceFilter');
     this.platformFilter = document.getElementById('platformFilter');
     this.searchFilter = document.getElementById('searchFilter');
+    this.searchChipInput = document.getElementById('searchChipInput');
+    this.searchChips = document.getElementById('searchChips');
+    this.searchAutocomplete = document.getElementById('searchAutocomplete');
     this.clearSearchBtn = document.getElementById('clearSearchBtn');
     this.showBlacklistedCheckbox = document.getElementById('showBlacklisted');
+    this.showGeneralTagsCheckbox = document.getElementById('showGeneralTags');
     this.emptyState = document.getElementById('emptyState');
     
     // Action buttons
@@ -177,11 +212,22 @@ class CommisionsfinderPopup {
     // Filters
     this.confidenceFilter.addEventListener('change', () => this.applyFilters());
     this.platformFilter.addEventListener('change', () => this.applyFilters());
-    this.searchFilter.addEventListener('input', () => this.debouncedSearch());
+    this.searchFilter.addEventListener('input', () => this.handleSearchInput());
+    this.searchFilter.addEventListener('keydown', (e) => this.handleSearchKeydown(e));
+    this.searchFilter.addEventListener('blur', () => {
+      setTimeout(() => this.hideTagAutocomplete(), 150);
+    });
+    if (this.searchChipInput) {
+      this.searchChipInput.addEventListener('click', () => this.searchFilter.focus());
+    }
     this.clearSearchBtn.addEventListener('click', () => this.clearSearch());
     this.showBlacklistedCheckbox.addEventListener('change', () => {
       this.showBlacklisted = this.showBlacklistedCheckbox.checked;
       this.applyFilters();
+    });
+    this.showGeneralTagsCheckbox.addEventListener('change', () => {
+      this.showGeneralTags = this.showGeneralTagsCheckbox.checked;
+      this.displayResults();
     });
     
     // Action buttons
@@ -676,7 +722,7 @@ class CommisionsfinderPopup {
         break;
 
       case 'MODEL_DOWNLOAD_PROGRESS':
-        this.updateProgressText(`Downloading AI model: ${message.data.status}`);
+        this.updateProgressText(`Downloading model: ${message.data.status}`);
         this.progressFill.style.width = `${message.data.progress}%`;
         break;
 
@@ -774,8 +820,17 @@ class CommisionsfinderPopup {
     return div.innerHTML;
   }
 
+  getVisibleProfileTags(result, limit = null) {
+    const tags = Array.isArray(result.profileTags) ? result.profileTags : [];
+    const visibleTags = this.showGeneralTags
+      ? tags
+      : tags.filter(tag => tag.category !== 'general');
+
+    return Number.isInteger(limit) ? visibleTags.slice(0, limit) : visibleTags;
+  }
+
   getProfileTagsHtml(result) {
-    const tags = Array.isArray(result.profileTags) ? result.profileTags.slice(0, 6) : [];
+    const tags = this.getVisibleProfileTags(result, 6);
     if (tags.length === 0) return '';
 
     return `
@@ -784,14 +839,480 @@ class CommisionsfinderPopup {
           const matchedAliases = Array.isArray(tag.matchedAliases) && tag.matchedAliases.length > 0
             ? `Matched: ${tag.matchedAliases.join(', ')}`
             : `Aliases: ${(tag.aliases || []).slice(0, 8).join(', ')}`;
+          const occurrenceCount = this.getTagOccurrenceCount(tag);
           return `
-            <span class="result-tag" title="${this.escapeHtml(matchedAliases)}">
-              ${this.escapeHtml(tag.label || tag.tag)}
+            <span class="result-tag" title="${this.escapeHtml(`${matchedAliases} | ${occurrenceCount} occurrences`)}">
+              <span class="result-tag-name">${this.escapeHtml(tag.label || tag.tag)}</span>
+              <span class="result-tag-count">${occurrenceCount}</span>
             </span>
           `;
         }).join('')}
       </div>
     `;
+  }
+
+  async loadJsonResource(path) {
+    const url = chrome.runtime?.getURL ? chrome.runtime.getURL(path) : path;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to load ${path}: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async loadE621Embeddings() {
+    if (this.e621EmbeddingsLoaded) return;
+
+    try {
+      const [aliases, implications, tags] = await Promise.all([
+        this.loadJsonResource('e621-embeddings/aliases.json'),
+        this.loadJsonResource('e621-embeddings/implications.json'),
+        this.loadJsonResource('e621-embeddings/tags.json'),
+      ]);
+
+      this.e621AliasMap = new Map([
+        ...Object.entries(E621_TAG_ALIASES),
+        ...Object.entries(aliases || {}).map(([alias, canonical]) => [
+          this.normalizeRawE621Tag(alias),
+          this.normalizeRawE621Tag(canonical),
+        ]),
+      ]);
+
+      this.e621ImplicationMap = new Map(Object.entries(implications || {}).map(([childTag, parentTags]) => [
+        this.resolveE621Alias(childTag),
+        [...new Set((Array.isArray(parentTags) ? parentTags : [])
+          .map(parentTag => this.resolveE621Alias(parentTag))
+          .filter(Boolean))],
+      ]));
+
+      this.e621Tags = (Array.isArray(tags) ? tags : [])
+        .map(tag => this.resolveE621Alias(tag))
+        .filter(Boolean);
+      this.e621TagExpansionCache.clear();
+      this.e621EmbeddingsLoaded = true;
+
+      if (this.debugSearch) {
+        console.log('[Search] Loaded e621 embeddings:', {
+          aliases: this.e621AliasMap.size,
+          implications: this.e621ImplicationMap.size,
+          tags: this.e621Tags.length,
+        });
+      }
+    } catch (error) {
+      console.warn('[Search] Failed to load e621 embeddings; falling back to scanned tags only:', error);
+    }
+  }
+
+  normalizeRawE621Tag(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/^[-+~]+/, '')
+      .replace(/&/g, ' and ')
+      .replace(/\s+/g, '_')
+      .replace(/[^a-z0-9:><=._*()-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+  }
+
+  resolveE621Alias(value) {
+    const normalized = this.normalizeRawE621Tag(value);
+    return this.e621AliasMap.get(normalized) || normalized;
+  }
+
+  normalizeSearchTag(value) {
+    return this.resolveE621Alias(value);
+  }
+
+  normalizeSearchText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[_-]+/g, ' ')
+      .replace(/[^\p{L}\p{N}#><:=.()]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  getActiveSearchTerm() {
+    return [...this.searchTokens, this.searchFilter.value.trim()]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+  }
+
+  tokenizeSearchQuery(query) {
+    const tokens = [];
+    let current = '';
+    let inQuote = false;
+
+    for (const char of String(query || '')) {
+      if (char === '"') {
+        inQuote = !inQuote;
+        current += char;
+        continue;
+      }
+
+      if (!inQuote && /\s/.test(char)) {
+        if (current.trim()) tokens.push(current.trim());
+        current = '';
+        continue;
+      }
+
+      current += char;
+    }
+
+    if (current.trim()) tokens.push(current.trim());
+    return tokens.map(token => token.replace(/^"|"$/g, '').trim()).filter(Boolean);
+  }
+
+  stripSearchPrefix(token) {
+    const prefix = {
+      negative: false,
+      optional: false,
+    };
+    let value = String(token || '').trim();
+
+    while (value.length > 1 && ['-', '~'].includes(value[0])) {
+      if (value[0] === '-') prefix.negative = !prefix.negative;
+      if (value[0] === '~') prefix.optional = true;
+      value = value.slice(1);
+    }
+
+    return { ...prefix, value };
+  }
+
+  parseSearchQuery(query) {
+    const tokens = this.tokenizeSearchQuery(query);
+    const parsed = {
+      positiveTerms: [],
+      negativeTerms: [],
+      optionalTerms: [],
+      groups: [],
+      optionalGroups: [],
+      filters: [],
+      order: null,
+      rawTerms: [],
+    };
+
+    const parseTokenInto = (token, target) => {
+      const { negative, optional, value } = this.stripSearchPrefix(token);
+      const filterMatch = value.match(/^([a-z_]+):(>=|<=|>|<|=)?(.+)$/i);
+
+      if (filterMatch) {
+        const [, field, operator = '=', rawValue] = filterMatch;
+        const filter = {
+          field: field.toLowerCase(),
+          operator,
+          value: rawValue.trim().replace(/^"|"$/g, ''),
+          negative,
+        };
+
+        if (filter.field === 'order') {
+          parsed.order = {
+            value: filter.value.toLowerCase(),
+            reversed: negative,
+          };
+        } else {
+          target.filters.push(filter);
+        }
+        return;
+      }
+
+      const canonicalTerm = this.normalizeSearchTag(value);
+      if (!canonicalTerm) return;
+
+      if (negative) {
+        target.negativeTerms.push(canonicalTerm);
+      } else if (optional) {
+        target.optionalTerms.push(canonicalTerm);
+      } else {
+        target.positiveTerms.push(canonicalTerm);
+      }
+    };
+
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      const groupPrefix = this.stripSearchPrefix(token);
+
+      if (groupPrefix.value === '(') {
+        const group = {
+          positiveTerms: [],
+          negativeTerms: [],
+          optionalTerms: [],
+          filters: [],
+          negative: groupPrefix.negative,
+          optional: groupPrefix.optional,
+        };
+
+        index++;
+        while (index < tokens.length && tokens[index] !== ')') {
+          parseTokenInto(tokens[index], group);
+          index++;
+        }
+
+        if (group.optional) {
+          parsed.optionalGroups.push(group);
+        } else {
+          parsed.groups.push(group);
+        }
+        parsed.rawTerms.push(token);
+        continue;
+      }
+
+      parseTokenInto(token, parsed);
+      parsed.rawTerms.push(token);
+    }
+
+    return parsed;
+  }
+
+  getResultSearchFields(result) {
+    const profileTagText = Array.isArray(result.profileTags)
+      ? result.profileTags
+          .flatMap(tag => [tag.tag, tag.label, ...(tag.aliases || []), ...(tag.matchedAliases || [])])
+          .join(' ')
+      : '';
+
+    const normalizedTagText = [
+      result.tagSearchText || '',
+      Array.isArray(result.tagAliases) ? result.tagAliases.join(' ') : '',
+      profileTagText,
+    ].join(' ');
+
+    return {
+      text: this.normalizeSearchText([
+        result.displayName,
+        result.username,
+        result.bio,
+        Array.isArray(result.triggers) ? result.triggers.join(' ') : result.triggers,
+        this.formatPlatformName(result.platform),
+      ].join(' ')),
+      tags: this.normalizeSearchText(normalizedTagText),
+      canonicalTags: new Set(this.getResultTagNames(result)),
+    };
+  }
+
+  getE621TagExpansion(tagName) {
+    const canonicalTag = this.resolveE621Alias(tagName);
+    if (!canonicalTag) return [];
+    if (this.e621TagExpansionCache.has(canonicalTag)) {
+      return this.e621TagExpansionCache.get(canonicalTag);
+    }
+
+    const expandedTags = new Set([canonicalTag]);
+    const visit = (tag, depth = 0) => {
+      if (depth > 20 || expandedTags.size > 200) return;
+      const impliedTags = this.e621ImplicationMap.get(tag) || [];
+      for (const impliedTag of impliedTags) {
+        const canonicalImpliedTag = this.resolveE621Alias(impliedTag);
+        if (!canonicalImpliedTag || expandedTags.has(canonicalImpliedTag)) continue;
+        expandedTags.add(canonicalImpliedTag);
+        visit(canonicalImpliedTag, depth + 1);
+      }
+    };
+
+    visit(canonicalTag);
+    const result = [...expandedTags];
+    this.e621TagExpansionCache.set(canonicalTag, result);
+    return result;
+  }
+
+  getResultTagNames(result) {
+    const tags = [];
+    if (Array.isArray(result.profileTags)) {
+      result.profileTags.forEach(tag => {
+        tags.push(tag.tag, tag.label, ...(tag.aliases || []), ...(tag.matchedAliases || []));
+      });
+    }
+    if (Array.isArray(result.tagAliases)) {
+      tags.push(...result.tagAliases);
+    }
+    if (result.tagSearchText) {
+      tags.push(...result.tagSearchText.split(/\s+/));
+    }
+
+    return [...new Set(tags.flatMap(tag => this.getE621TagExpansion(tag)).filter(Boolean))];
+  }
+
+  resultMatchesSearchTerm(result, term) {
+    const fields = this.getResultSearchFields(result);
+    const textTerm = this.normalizeSearchText(term);
+    const tagTerm = this.normalizeSearchTag(term);
+    const isWildcard = tagTerm.includes('*');
+
+    if (isWildcard) {
+      const pattern = new RegExp(`^${tagTerm.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+      return [...fields.canonicalTags].some(tag => pattern.test(tag));
+    }
+
+    return fields.canonicalTags.has(tagTerm)
+      || fields.tags.includes(textTerm)
+      || fields.text.includes(textTerm);
+  }
+
+  compareRangeValue(actual, rawValue, operator = '=') {
+    const value = String(rawValue || '').trim().toLowerCase();
+    if (value.includes('..')) {
+      const [minRaw, maxRaw] = value.split('..');
+      const min = minRaw === '' ? null : Number(minRaw);
+      const max = maxRaw === '' ? null : Number(maxRaw);
+      if (min !== null && (!Number.isFinite(min) || actual < min)) return false;
+      if (max !== null && (!Number.isFinite(max) || actual > max)) return false;
+      return true;
+    }
+
+    if (value.includes(',')) {
+      return value.split(',').some(part => this.compareRangeValue(actual, part, '='));
+    }
+
+    const inlineOperatorMatch = value.match(/^(>=|<=|>|<|=)(.+)$/);
+    const effectiveOperator = inlineOperatorMatch ? inlineOperatorMatch[1] : operator;
+    const numericValue = Number(inlineOperatorMatch ? inlineOperatorMatch[2] : value);
+    if (!Number.isFinite(numericValue)) return false;
+
+    switch (effectiveOperator) {
+      case '>': return actual > numericValue;
+      case '>=': return actual >= numericValue;
+      case '<': return actual < numericValue;
+      case '<=': return actual <= numericValue;
+      case '=':
+      default: return actual === numericValue;
+    }
+  }
+
+  getSearchFilterValue(result, field) {
+    const normalizedField = field.toLowerCase();
+    switch (normalizedField) {
+      case 'score':
+      case 'confidence':
+        return this.getDisplayConfidence(result);
+      case 'posts':
+      case 'post_count':
+      case 'postcount':
+        return Number(result.e621PostCount || 0);
+      case 'tagcount':
+      case 'tags':
+        return Array.isArray(result.profileTags) ? result.profileTags.length : 0;
+      default:
+        return null;
+    }
+  }
+
+  resultMatchesSearchFilter(result, filter) {
+    let matched = true;
+    switch (filter.field) {
+      case 'name':
+      case 'artist':
+      case 'user':
+      case 'username':
+        matched = this.normalizeSearchText(`${result.displayName || ''} ${result.username || ''}`)
+          .includes(this.normalizeSearchText(filter.value));
+        break;
+      case 'bio':
+      case 'description':
+        matched = this.normalizeSearchText(result.bio || '').includes(this.normalizeSearchText(filter.value));
+        break;
+      case 'platform':
+        matched = result.platform === filter.value
+          || (Array.isArray(result.platforms) && result.platforms.includes(filter.value));
+        break;
+      case 'status':
+        matched = String(result.commissionStatus || '').toLowerCase() === String(filter.value || '').toLowerCase();
+        break;
+      case 'score':
+      case 'confidence':
+      case 'posts':
+      case 'post_count':
+      case 'postcount':
+      case 'tagcount':
+      case 'tags': {
+        const actual = this.getSearchFilterValue(result, filter.field);
+        matched = actual !== null && this.compareRangeValue(actual, filter.value, filter.operator);
+        break;
+      }
+      default:
+        matched = false;
+        break;
+    }
+
+    return filter.negative ? !matched : matched;
+  }
+
+  resultMatchesSearchGroup(result, group) {
+    const positiveMatch = group.positiveTerms.every(term => this.resultMatchesSearchTerm(result, term));
+    const negativeMatch = group.negativeTerms.every(term => !this.resultMatchesSearchTerm(result, term));
+    const optionalMatch = group.optionalTerms.length === 0
+      || group.optionalTerms.some(term => this.resultMatchesSearchTerm(result, term));
+    const filterMatch = group.filters.every(filter => this.resultMatchesSearchFilter(result, filter));
+    const matched = positiveMatch && negativeMatch && optionalMatch && filterMatch;
+
+    return group.negative ? !matched : matched;
+  }
+
+  resultMatchesParsedSearch(result, parsedQuery) {
+    const positiveMatch = parsedQuery.positiveTerms.every(term => this.resultMatchesSearchTerm(result, term));
+    if (!positiveMatch) return false;
+
+    const negativeMatch = parsedQuery.negativeTerms.every(term => !this.resultMatchesSearchTerm(result, term));
+    if (!negativeMatch) return false;
+
+    const optionalConditions = [
+      ...parsedQuery.optionalTerms.map(term => () => this.resultMatchesSearchTerm(result, term)),
+      ...(parsedQuery.optionalGroups || []).map(group => () => this.resultMatchesSearchGroup(result, group)),
+    ];
+    const optionalMatch = optionalConditions.length === 0 || optionalConditions.some(matches => matches());
+    if (!optionalMatch) return false;
+
+    const groupMatch = parsedQuery.groups.every(group => this.resultMatchesSearchGroup(result, group));
+    if (!groupMatch) return false;
+
+    return parsedQuery.filters.every(filter => this.resultMatchesSearchFilter(result, filter));
+  }
+
+  getSearchOrderValue(result, orderValue) {
+    const normalizedOrder = String(orderValue || '').replace(/_(asc|desc)$/, '');
+    switch (normalizedOrder) {
+      case 'score':
+      case 'confidence':
+        return this.getDisplayConfidence(result);
+      case 'posts':
+      case 'postcount':
+      case 'post_count':
+        return Number(result.e621PostCount || 0);
+      case 'tagcount':
+      case 'tags':
+        return Array.isArray(result.profileTags) ? result.profileTags.length : 0;
+      case 'name':
+        return String(result.displayName || result.username || '').toLowerCase();
+      case 'username':
+      case 'user':
+        return String(result.username || '').toLowerCase();
+      case 'platform':
+        return String(result.platform || '').toLowerCase();
+      case 'created':
+      case 'date':
+      case 'updated':
+      case 'id':
+        return Number(result.lastUpdated || 0);
+      default:
+        return null;
+    }
+  }
+
+  compareSearchOrder(a, b, order) {
+    const orderValue = String(order.value || '').toLowerCase();
+    const explicitAsc = orderValue.endsWith('_asc');
+    const explicitDesc = orderValue.endsWith('_desc');
+    const reversed = order.reversed || explicitAsc;
+    const direction = reversed && !explicitDesc ? 1 : -1;
+    const aValue = this.getSearchOrderValue(a, orderValue);
+    const bValue = this.getSearchOrderValue(b, orderValue);
+
+    if (aValue === null || bValue === null || aValue === bValue) return 0;
+    if (typeof aValue === 'string' || typeof bValue === 'string') {
+      const stringDirection = explicitDesc || order.reversed ? -1 : 1;
+      return String(aValue).localeCompare(String(bValue)) * stringDirection;
+    }
+    return aValue > bValue ? direction : -direction;
   }
 
   // Initialize Fuse.js search instance
@@ -874,7 +1395,7 @@ class CommisionsfinderPopup {
     }
   }
 
-  // Enhanced fuzzy search using Fuse.js
+  // Enhanced fuzzy search using Fuse.js plus e621-style tag/filter syntax
   performFuzzySearch(searchTerm) {
     if (!searchTerm || searchTerm.trim() === '') {
       if (this.debugSearch) {
@@ -884,10 +1405,20 @@ class CommisionsfinderPopup {
     }
     
     const trimmedSearch = searchTerm.trim();
+    const parsedQuery = this.parseSearchQuery(trimmedSearch);
+    const fuseQuery = parsedQuery.positiveTerms.join(' ');
+    const usesAdvancedTagSyntax = parsedQuery.positiveTerms.some(term => term.includes('*'))
+      || parsedQuery.optionalTerms.length > 0
+      || parsedQuery.groups.length > 0;
     
     if (this.debugSearch) {
       console.log('[Search] Performing search for:', trimmedSearch);
+      console.log('[Search] Parsed query:', parsedQuery);
       console.log('[Search] Searching in dataset of', this.currentResults.length, 'items');
+    }
+
+    if (!fuseQuery || usesAdvancedTagSyntax) {
+      return this.currentResults.filter(result => this.resultMatchesParsedSearch(result, parsedQuery));
     }
     
     // Initialize search if needed
@@ -896,7 +1427,7 @@ class CommisionsfinderPopup {
     }
     
     // Perform the search
-    const searchResults = this.searchInstance.search(trimmedSearch);
+    const searchResults = this.searchInstance.search(fuseQuery);
     
     if (this.debugSearch) {
       console.log('[Search] Fuse.js returned', searchResults.length, 'results');
@@ -917,7 +1448,7 @@ class CommisionsfinderPopup {
         ...(originalItem || result.item), // Use original if found, fallback to search item
         searchScore: result.score // Add search score for debugging
       };
-    });
+    }).filter(result => this.resultMatchesParsedSearch(result, parsedQuery));
     
     if (this.debugSearch) {
       console.log('[Search] Extracted', items.length, 'items from Fuse.js results');
@@ -941,7 +1472,8 @@ class CommisionsfinderPopup {
     
     const minConfidence = parseFloat(this.confidenceFilter.value);
     const platformFilter = this.platformFilter.value;
-    const searchTerm = this.searchFilter.value.trim();
+    const searchTerm = this.getActiveSearchTerm();
+    const parsedSearchQuery = searchTerm ? this.parseSearchQuery(searchTerm) : null;
     
     // Show/hide clear search button
     if (this.clearSearchBtn) {
@@ -1010,7 +1542,7 @@ class CommisionsfinderPopup {
       console.log('[Search] After all filters:', this.filteredResults.length, 'results');
     }
     
-    // Step 3: Sort results: favorites first, then by search score (if search active), then by confidence
+    // Step 3: Sort results: favorites first, then explicit order metatags, then open likelihood.
     this.filteredResults.sort((a, b) => {
       const aId = `${a.platform}_${a.username}`;
       const bId = `${b.platform}_${b.username}`;
@@ -1020,20 +1552,23 @@ class CommisionsfinderPopup {
       // If one is favorited and the other isn't, favorited comes first
       if (aFavorited && !bFavorited) return -1;
       if (!aFavorited && bFavorited) return 1;
+
+      const orderDiff = parsedSearchQuery?.order
+        ? this.compareSearchOrder(a, b, parsedSearchQuery.order)
+        : 0;
+      if (orderDiff !== 0) return orderDiff;
       
-      // If search is active and we have search scores, sort by search relevance
-      if (searchTerm && a.searchScore !== undefined && b.searchScore !== undefined) {
-        // Lower score = better match in Fuse.js
-        const scoreDiff = a.searchScore - b.searchScore;
-        if (Math.abs(scoreDiff) > 0.01) { // Only if scores are meaningfully different
-          return scoreDiff;
-        }
-      }
-      
-      // Otherwise sort by transformed confidence (likelihood of open commissions)
       const aTransformed = this.transformConfidenceScore(a);
       const bTransformed = this.transformConfidenceScore(b);
-      return bTransformed - aTransformed;
+      const confidenceDiff = bTransformed - aTransformed;
+      if (Math.abs(confidenceDiff) > 0.001) return confidenceDiff;
+
+      // Keep search relevance only as a tie-breaker so likely-open artists stay first.
+      if (searchTerm && a.searchScore !== undefined && b.searchScore !== undefined) {
+        return a.searchScore - b.searchScore;
+      }
+
+      return 0;
     });
     
     if (this.debugSearch) {
@@ -1148,7 +1683,7 @@ class CommisionsfinderPopup {
     this.resultsCount.textContent = '0 artists';
     
     // Get context for the message
-    const searchTerm = this.searchFilter.value.trim();
+    const searchTerm = this.getActiveSearchTerm();
     const platformFilter = this.platformFilter.value;
     const confidenceFilter = parseFloat(this.confidenceFilter.value);
     const isSearchActive = searchTerm !== '';
@@ -1597,9 +2132,45 @@ class CommisionsfinderPopup {
     }
   }
 
+  getTagOccurrenceCount(tag) {
+    if (Number.isFinite(tag.postCount)) return tag.postCount;
+    const sourceCount = Array.isArray(tag.sources) ? tag.sources.length : 0;
+    const aliasCount = Array.isArray(tag.matchedAliases) ? tag.matchedAliases.length : 0;
+    return Math.max(sourceCount, aliasCount, 1);
+  }
+
+  createTagDetails(result) {
+    const tags = this.getVisibleProfileTags(result);
+    if (tags.length === 0) return '';
+
+    return `
+        <div class="confidence-component">
+            <div class="confidence-component-header">
+                <span class="confidence-component-title">Tags Found</span>
+                <span class="confidence-component-score">${tags.length}</span>
+            </div>
+            <div class="details-tag-list">
+                ${tags.map(tag => {
+                  const label = tag.label || tag.tag;
+                  const count = this.getTagOccurrenceCount(tag);
+                  const title = tag.postCount
+                    ? `${count} e621 post occurrences`
+                    : `${count} local matches`;
+                  return `
+                    <span class="details-tag" title="${this.escapeHtml(title)}">
+                        <span class="details-tag-name">${this.escapeHtml(label)}</span>
+                        <span class="details-tag-count">${count}</span>
+                    </span>
+                  `;
+                }).join('')}
+            </div>
+        </div>
+    `;
+  }
+
   createConfidenceDetails(result) {
     const { analysis } = result;
-    if (!analysis?.components) return '';
+    if (!analysis?.components) return this.createTagDetails(result);
 
     const components = analysis.components;
     let details = '';
@@ -1716,7 +2287,6 @@ class CommisionsfinderPopup {
                         ${galleryItems.map(item => {
                             // Show raw confidence for individual gallery items
                             const itemConfidence = this.getRawConfidencePercent(item.confidence);
-                            const timeAgo = item.date ? this.formatTimeAgo(new Date(item.date).getTime()) : '';
                             const shortTitle = item.title ? 
                                 (item.title.length > 25 ? item.title.substring(0, 22) + '...' : item.title) : 
                                 'Untitled';
@@ -1765,7 +2335,6 @@ class CommisionsfinderPopup {
                         ${postItems.map(post => {
                             // Show raw confidence for individual posts
                             const postConfidence = this.getRawConfidencePercent(post.confidence);
-                            const timeAgo = post.date ? this.formatTimeAgo(new Date(post.date).getTime()) : '';
                             const shortText = post.text ? 
                                 (post.text.length > 30 ? post.text.substring(0, 27) + '...' : post.text) : 
                                 'No text';
@@ -1788,6 +2357,8 @@ class CommisionsfinderPopup {
             </div>
         `;
     }
+
+    details += this.createTagDetails(result);
 
     // Final determination
     // Use transformed confidence for final display (represents likelihood of open commissions)
@@ -2276,6 +2847,194 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
     console.log('[Search] Debug mode:', this.debugSearch ? 'ENABLED' : 'DISABLED');
   }
 
+  handleSearchInput() {
+    this.updateTagAutocomplete();
+    this.debouncedSearch();
+  }
+
+  handleSearchKeydown(e) {
+    if (e.key === 'Escape') {
+      this.hideTagAutocomplete();
+      return;
+    }
+
+    if (['Enter', 'Tab', ',', ' '].includes(e.key)) {
+      const token = this.searchFilter.value.trim().replace(/,$/, '');
+      if (!token) return;
+      if (e.key === ' ' && (token.match(/"/g) || []).length % 2 === 1) return;
+      e.preventDefault();
+      this.addSearchToken(token);
+    }
+  }
+
+  addSearchToken(token) {
+    const trimmedToken = String(token || '').trim();
+    if (!trimmedToken) return;
+
+    this.searchTokens.push(trimmedToken);
+    this.searchFilter.value = '';
+    this.renderSearchChips();
+    this.hideTagAutocomplete();
+    this.applyFilters();
+  }
+
+  removeSearchToken(index) {
+    this.searchTokens.splice(index, 1);
+    this.renderSearchChips();
+    this.applyFilters();
+    this.searchFilter.focus();
+  }
+
+  renderSearchChips() {
+    if (!this.searchChips) return;
+
+    this.searchChips.innerHTML = this.searchTokens.map((token, index) => `
+      <span class="search-chip ${token.startsWith('-') ? 'search-chip-negative' : ''}">
+        <span class="search-chip-text">${this.escapeHtml(token)}</span>
+        <button type="button" class="search-chip-remove" data-index="${index}" aria-label="Remove ${this.escapeHtml(token)}">×</button>
+      </span>
+    `).join('');
+
+    this.searchChips.querySelectorAll('.search-chip-remove').forEach(button => {
+      button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.removeSearchToken(Number(button.dataset.index));
+      });
+    });
+  }
+
+  getLocalTagAutocompleteOptions(prefix) {
+    const normalizedPrefix = this.normalizeSearchTag(prefix);
+    if (!normalizedPrefix) return [];
+
+    const suggestions = new Map();
+    const addSuggestion = (tag, count = 0, source = 'local', rank = Number.MAX_SAFE_INTEGER) => {
+      const normalizedTag = this.normalizeSearchTag(tag);
+      if (!normalizedTag || !normalizedTag.startsWith(normalizedPrefix)) return;
+      const existing = suggestions.get(normalizedTag);
+      if (!existing || count > existing.count || (count === existing.count && rank < existing.rank)) {
+        suggestions.set(normalizedTag, { tag: normalizedTag, count, source, rank });
+      }
+    };
+
+    LOCAL_E621_TAG_SUGGESTIONS.forEach(tag => addSuggestion(tag, 1));
+    Object.entries(E621_TAG_ALIASES).forEach(([alias, canonical]) => {
+      addSuggestion(alias, 1);
+      addSuggestion(canonical, 1);
+    });
+    this.e621Tags.forEach((tag, index) => addSuggestion(tag, 0, 'e621', index));
+    this.e621AliasMap.forEach((canonical, alias) => {
+      addSuggestion(alias, 0, 'e621');
+      addSuggestion(canonical, 0, 'e621');
+    });
+
+    this.currentResults.forEach(result => {
+      (result.profileTags || []).forEach(tag => {
+        const count = this.getTagOccurrenceCount(tag);
+        addSuggestion(tag.tag, count);
+        addSuggestion(tag.label, count);
+        (tag.aliases || []).forEach(alias => addSuggestion(alias, count));
+      });
+    });
+
+    return [...suggestions.values()]
+      .sort((a, b) => b.count - a.count || a.rank - b.rank || a.tag.localeCompare(b.tag))
+      .slice(0, 8);
+  }
+
+  async fetchE621TagAutocompleteOptions(prefix) {
+    const normalizedPrefix = this.normalizeSearchTag(prefix);
+    if (normalizedPrefix.length < 2) return [];
+    if (this.tagAutocompleteCache.has(normalizedPrefix)) {
+      return this.tagAutocompleteCache.get(normalizedPrefix);
+    }
+
+    const url = new URL('https://e621.net/tags.json');
+    url.searchParams.set('search[name_matches]', `${normalizedPrefix}*`);
+    url.searchParams.set('search[order]', 'count');
+    url.searchParams.set('limit', '8');
+
+    try {
+      const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`e621 autocomplete failed with ${response.status}`);
+      const payload = await response.json();
+      const options = (Array.isArray(payload) ? payload : [])
+        .map(tag => ({
+          tag: this.normalizeSearchTag(tag.name),
+          count: tag.post_count || 0,
+          source: 'e621',
+        }))
+        .filter(option => option.tag)
+        .slice(0, 8);
+      this.tagAutocompleteCache.set(normalizedPrefix, options);
+      return options;
+    } catch (error) {
+      if (this.debugSearch) {
+        console.warn('[Search] e621 autocomplete failed:', error);
+      }
+      return [];
+    }
+  }
+
+  updateTagAutocomplete() {
+    if (!this.searchAutocomplete) return;
+    const rawPrefix = this.searchFilter.value.trim().replace(/^[-~]+/, '');
+    if (!rawPrefix || rawPrefix.includes(':')) {
+      this.hideTagAutocomplete();
+      return;
+    }
+
+    const localOptions = this.getLocalTagAutocompleteOptions(rawPrefix);
+    this.renderTagAutocomplete(localOptions);
+    if (this.e621EmbeddingsLoaded) return;
+
+    if (this.tagAutocompleteTimer) {
+      clearTimeout(this.tagAutocompleteTimer);
+    }
+    this.tagAutocompleteTimer = setTimeout(async () => {
+      const remoteOptions = await this.fetchE621TagAutocompleteOptions(rawPrefix);
+      const latestPrefix = this.searchFilter.value.trim().replace(/^[-~]+/, '');
+      if (latestPrefix !== rawPrefix) return;
+      const merged = new Map();
+      [...localOptions, ...remoteOptions].forEach(option => {
+        if (!merged.has(option.tag)) merged.set(option.tag, option);
+      });
+      this.renderTagAutocomplete([...merged.values()].slice(0, 10));
+    }, 250);
+  }
+
+  renderTagAutocomplete(options) {
+    if (!this.searchAutocomplete) return;
+    if (!options.length) {
+      this.hideTagAutocomplete();
+      return;
+    }
+
+    const currentPrefix = this.searchFilter.value.trim().match(/^[-~]+/)?.[0] || '';
+    this.searchAutocomplete.innerHTML = options.map(option => `
+      <button type="button" class="tag-suggestion" data-tag="${this.escapeHtml(option.tag)}">
+        <span>${this.escapeHtml(`${currentPrefix}${option.tag}`)}</span>
+        <span class="tag-suggestion-meta">${option.source}${option.count ? ` · ${option.count}` : ''}</span>
+      </button>
+    `).join('');
+    this.searchAutocomplete.style.display = 'block';
+
+    this.searchAutocomplete.querySelectorAll('.tag-suggestion').forEach(button => {
+      button.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const selectedTag = `${currentPrefix}${button.dataset.tag}`;
+        this.addSearchToken(selectedTag);
+      });
+    });
+  }
+
+  hideTagAutocomplete() {
+    if (this.searchAutocomplete) {
+      this.searchAutocomplete.style.display = 'none';
+      this.searchAutocomplete.innerHTML = '';
+    }
+  }
+
   debouncedSearch() {
     // Clear existing timer
     if (this.searchDebounceTimer) {
@@ -2299,7 +3058,10 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
       this.searchDebounceTimer = null;
     }
     
+    this.searchTokens = [];
     this.searchFilter.value = '';
+    this.renderSearchChips();
+    this.hideTagAutocomplete();
     this.searchInstance = null;
     this.applyFilters();
   }
@@ -2308,8 +3070,8 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
     const stats = {
       totalResults: this.currentResults.length,
       filteredResults: this.filteredResults.length,
-      searchActive: this.searchFilter.value.trim() !== '',
-      searchTerm: this.searchFilter.value.trim(),
+      searchActive: this.getActiveSearchTerm() !== '',
+      searchTerm: this.getActiveSearchTerm(),
       fuseInitialized: this.searchInstance !== null
     };
     

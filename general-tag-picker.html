@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commsfinder General Tag Picker</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111827;
+      --panel: #1f2937;
+      --panel-2: #172033;
+      --border: #374151;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #6366f1;
+      --selected: #059669;
+      --selected-border: #34d399;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .controls {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) auto auto auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(31, 41, 55, 0.96);
+      backdrop-filter: blur(8px);
+    }
+
+    input[type="search"],
+    input[type="file"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      background: var(--panel-2);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+    }
+
+    button:hover {
+      border-color: var(--accent);
+      background: #243047;
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    .primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+
+    .status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pill {
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--panel);
+    }
+
+    .loader {
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+
+    .tag-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .tag-button {
+      max-width: 220px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tag-button.selected {
+      border-color: var(--selected-border);
+      background: rgba(5, 150, 105, 0.28);
+      color: #d1fae5;
+    }
+
+    .output {
+      display: none;
+      margin-top: 16px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 160px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #0b1220;
+      color: var(--text);
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .controls {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>General Tag Picker</h1>
+        <p>Select the e621 general tags that should remain visible in Commsfinder. Selected tags turn green.</p>
+      </div>
+    </header>
+
+    <div class="loader" id="loader">
+      Loading <code>e621-embeddings/tags-by-category.json</code>. If the browser blocks local file loading, choose that JSON file manually:
+      <input type="file" id="fileInput" accept="application/json,.json">
+    </div>
+
+    <div class="controls">
+      <input type="search" id="searchInput" placeholder="Filter tags, e.g. transformation, hypnosis, anthro">
+      <button id="selectVisibleBtn">Select Visible</button>
+      <button id="clearVisibleBtn">Clear Visible</button>
+      <button id="clearAllBtn">Clear All</button>
+      <button id="exportBtn" class="primary">Export Keep List</button>
+    </div>
+
+    <div class="status">
+      <span class="pill" id="totalCount">0 total</span>
+      <span class="pill" id="visibleCount">0 visible</span>
+      <span class="pill" id="selectedCount">0 selected</span>
+    </div>
+
+    <div class="tag-grid" id="tagGrid"></div>
+
+    <div class="output" id="outputPanel">
+      <p>Exported JSON:</p>
+      <textarea id="outputText" readonly></textarea>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'commsfinder.generalTagsToKeep';
+    const state = {
+      tags: [],
+      visibleTags: [],
+      selected: new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')),
+      query: '',
+    };
+
+    const tagGrid = document.getElementById('tagGrid');
+    const searchInput = document.getElementById('searchInput');
+    const totalCount = document.getElementById('totalCount');
+    const visibleCount = document.getElementById('visibleCount');
+    const selectedCount = document.getElementById('selectedCount');
+    const fileInput = document.getElementById('fileInput');
+    const loader = document.getElementById('loader');
+    const outputPanel = document.getElementById('outputPanel');
+    const outputText = document.getElementById('outputText');
+
+    function saveSelection() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...state.selected].sort()));
+    }
+
+    function normalizeTag(tag) {
+      return String(tag || '').trim();
+    }
+
+    function setTags(tags) {
+      state.tags = [...new Set(tags.map(normalizeTag).filter(Boolean))];
+      applyFilter();
+      loader.style.display = 'none';
+    }
+
+    function getFilteredTags() {
+      const query = state.query.toLowerCase().trim();
+      if (!query) return state.tags;
+      return state.tags.filter(tag => tag.toLowerCase().includes(query));
+    }
+
+    function render() {
+      totalCount.textContent = `${state.tags.length} total`;
+      visibleCount.textContent = `${state.visibleTags.length} visible`;
+      selectedCount.textContent = `${state.selected.size} selected`;
+
+      const fragment = document.createDocumentFragment();
+      state.visibleTags.forEach(tag => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `tag-button${state.selected.has(tag) ? ' selected' : ''}`;
+        button.textContent = tag;
+        button.title = tag;
+        button.addEventListener('click', () => {
+          if (state.selected.has(tag)) {
+            state.selected.delete(tag);
+          } else {
+            state.selected.add(tag);
+          }
+          saveSelection();
+          button.classList.toggle('selected', state.selected.has(tag));
+          selectedCount.textContent = `${state.selected.size} selected`;
+        });
+        fragment.appendChild(button);
+      });
+
+      tagGrid.replaceChildren(fragment);
+    }
+
+    function applyFilter() {
+      state.visibleTags = getFilteredTags();
+      render();
+    }
+
+    function parseTagsByCategory(payload) {
+      const generalTags = payload && Array.isArray(payload.general) ? payload.general : [];
+      if (generalTags.length === 0) {
+        throw new Error('No "general" tag array found in JSON.');
+      }
+      return generalTags;
+    }
+
+    async function loadDefaultTags() {
+      try {
+        const response = await fetch('e621-embeddings/tags-by-category.json');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        setTags(parseTagsByCategory(payload));
+      } catch (error) {
+        loader.insertAdjacentHTML('beforeend', `<p>Automatic loading failed: ${error.message}</p>`);
+      }
+    }
+
+    searchInput.addEventListener('input', () => {
+      state.query = searchInput.value;
+      applyFilter();
+    });
+
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      const payload = JSON.parse(await file.text());
+      setTags(parseTagsByCategory(payload));
+    });
+
+    document.getElementById('selectVisibleBtn').addEventListener('click', () => {
+      state.visibleTags.forEach(tag => state.selected.add(tag));
+      saveSelection();
+      render();
+    });
+
+    document.getElementById('clearVisibleBtn').addEventListener('click', () => {
+      state.visibleTags.forEach(tag => state.selected.delete(tag));
+      saveSelection();
+      render();
+    });
+
+    document.getElementById('clearAllBtn').addEventListener('click', () => {
+      state.selected.clear();
+      saveSelection();
+      render();
+    });
+
+    document.getElementById('exportBtn').addEventListener('click', async () => {
+      const keepTags = [...state.selected].sort();
+      const json = JSON.stringify(keepTags, null, 2);
+      outputPanel.style.display = 'block';
+      outputText.value = json;
+
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'general-tags-to-keep.json';
+      link.click();
+      URL.revokeObjectURL(url);
+
+      try {
+        await navigator.clipboard.writeText(json);
+      } catch (error) {
+        // Download still works when clipboard permissions are unavailable.
+      }
+    });
+
+    loadDefaultTags();
+  </script>
+</body>
+</html>

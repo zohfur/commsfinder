@@ -1,8 +1,12 @@
 import {
   buildE621TagClassification,
   collectRelevantE621Tags,
+  findLocalE621ArtistTag,
   isLikelyArtistTagMatch,
+  normalizeE621ArtistSearchName,
   normalizeE621TagName,
+  scoreLocalArtistTagMatch,
+  searchE621ArtistTag,
   selectBestArtistTag,
 } from '../utils/e621-tagger.js';
 
@@ -10,6 +14,22 @@ describe('e621 tag enrichment', () => {
   test('normalizes profile names into e621 tag names', () => {
     expect(normalizeE621TagName('@Moon Artist')).toBe('moon_artist');
     expect(normalizeE621TagName('Fox-and-Wolf')).toBe('fox_and_wolf');
+    expect(normalizeE621TagName('hypno')).toBe('hypnosis');
+  });
+
+  test('uses only the account name for Bluesky handles before e621 lookup', () => {
+    expect(normalizeE621ArtistSearchName({
+      username: 'dendryte-axxon.bsky.social',
+      platform: 'bluesky',
+    })).toBe('dendryte_axxon');
+    expect(normalizeE621ArtistSearchName({
+      username: 'artist.example.com',
+      platform: 'bluesky',
+    })).toBe('artist');
+    expect(normalizeE621ArtistSearchName({
+      username: 'artist.example.com',
+      platform: 'furaffinity',
+    })).toBe('artist_example_com');
   });
 
   test('selects fuzzy artist tag matches over unrelated candidates', () => {
@@ -24,12 +44,32 @@ describe('e621 tag enrichment', () => {
     expect(isLikelyArtistTagMatch('MoonArtist', 'sun_artist')).toBe(false);
   });
 
+  test('finds local artist tag matches before searching e621 remotely', async () => {
+    const artistTags = ['klondike', 'unrelated_artist'];
+
+    expect(findLocalE621ArtistTag('klondikeart', artistTags)?.name).toBe('klondike');
+    expect(findLocalE621ArtistTag('klondikedraws', artistTags)?.name).toBe('klondike');
+    expect(scoreLocalArtistTagMatch('klondikeart', 'klondike')).toBeGreaterThan(0.9);
+
+    const match = await searchE621ArtistTag('klondikeart', {
+      artistTags,
+      fetchImpl: () => {
+        throw new Error('remote e621 search should not run when local artist tag matches');
+      },
+    });
+
+    expect(match).toEqual(expect.objectContaining({
+      name: 'klondike',
+      source: 'local-export',
+    }));
+  });
+
   test('aggregates relevant general and species tags from artist posts', () => {
     const posts = [
       {
         tags: {
-          general: ['transformation', 'hypnosis', 'sketch'],
-          species: ['werewolf'],
+          general: ['transformation', 'hypno', 'sketch', 'simple_background', 'clothing'],
+          species: ['werewolf', 'mammal'],
           artist: ['moon_artist'],
         },
       },
@@ -55,6 +95,11 @@ describe('e621 tag enrichment', () => {
       'hypnosis',
       'digital_art',
       'wolf',
+    ]));
+    expect(tags).not.toEqual(expect.arrayContaining([
+      'simple_background',
+      'clothing',
+      'mammal',
     ]));
     expect(tags).not.toContain('moon_artist');
     expect(tags).not.toContain('oc_name');

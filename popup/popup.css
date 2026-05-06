@@ -370,6 +370,133 @@ body {
   color: #6b7280;
 }
 
+.search-filter-row {
+  margin-top: 8px;
+  position: relative;
+  display: block;
+}
+
+.search-chip-input {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  min-height: 38px;
+  padding: 5px 32px 5px 8px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  cursor: text;
+}
+
+.search-chip-input:hover,
+.search-chip-input:focus-within {
+  border-color: #6366f1;
+}
+
+.search-chip-input .search-input {
+  min-width: 120px;
+  flex: 1;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: #e5e7eb;
+  outline: none;
+}
+
+.search-chips {
+  display: contents;
+}
+
+.search-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  gap: 5px;
+  padding: 3px 6px 3px 8px;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.18);
+  color: #c7d2fe;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.search-chip-negative {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(239, 68, 68, 0.16);
+  color: #fecaca;
+}
+
+.search-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-chip-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 1px;
+  opacity: 0.75;
+}
+
+.search-chip-remove:hover {
+  opacity: 1;
+}
+
+.tag-autocomplete {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  background: #111827;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.35);
+}
+
+.tag-suggestion {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: #e5e7eb;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tag-suggestion:last-child {
+  border-bottom: none;
+}
+
+.tag-suggestion:hover {
+  background: rgba(99, 102, 241, 0.16);
+}
+
+.tag-suggestion-meta {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.tag-toggle-row {
+  align-items: center;
+  justify-content: space-between;
+}
+
 .filter-select option {
   background: #1f2937;
   color: #e5e7eb;
@@ -455,17 +582,35 @@ body {
 
 .result-tag {
   max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: 1px solid rgba(129, 140, 248, 0.35);
   border-radius: 999px;
-  padding: 1px 7px;
+  padding: 1px 5px 1px 7px;
   background: rgba(99, 102, 241, 0.14);
   color: #c7d2fe;
   font-size: 10px;
   font-style: normal;
   line-height: 1.5;
+}
+
+.result-tag-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-tag-count {
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  font-size: 9px;
+  line-height: 1.4;
+  text-align: center;
 }
 
 .result-confidence {
@@ -635,7 +780,7 @@ body {
 .result-item.expanded .confidence-details {
     display: inline;
     opacity: 1;
-    max-height: 500px; /* Adjust based on your content */
+    max-height: 800px; /* Adjust based on your content */
 }
 
 .confidence-component {
@@ -710,6 +855,42 @@ body {
 .confidence-highlight::before {
     content: "★";
     margin-right: 4px;
+}
+
+.details-tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.details-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 180px;
+    padding: 3px 7px;
+    border: 1px solid rgba(129, 140, 248, 0.32);
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.14);
+    color: #c7d2fe;
+    font-size: 11px;
+}
+
+.details-tag-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.details-tag-count {
+    min-width: 16px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    font-size: 10px;
+    text-align: center;
 }
 
 .gallery-items {
@@ -1358,6 +1539,16 @@ body {
 /* Clear search button */
 .clear-search-btn {
   display: none;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px;
   transition: all 0.2s ease;
 }
 

@@ -95,7 +95,7 @@ const TAG_METADATA = [
     tag: 'goo',
     label: 'Goo',
     category: 'general',
-    aliases: ['goo', 'gooey', 'slime', 'slimy', 'ooze', 'mucus', 'goo creature', 'slime creature', 'liquid creature'],
+    aliases: ['goo', 'goo_(disambiguation)', 'gooey', 'slime', 'slimy', 'ooze', 'mucus', 'goo creature', 'slime creature', 'liquid creature'],
     implies: [],
   },
   {
