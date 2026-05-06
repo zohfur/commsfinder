@@ -16,6 +16,9 @@ class CommisionsfinderPopup {
     this.promoHiddenUntil = null; // Cache for promo hide until timestamp
     this.feedbackHiddenForever = false; // Cache for feedback hide forever preference
     this.feedbackHiddenUntil = null; // Cache for feedback hide until timestamp
+    this.lastFocusedElement = null;
+    this.activeFocusTrap = null;
+    this.loginRequiredPause = null;
     this.settings = {
       aiEnabled: true,  // AI enabled by default since no-AI mode is still in development
       selectedQuantization: 'full',
@@ -45,17 +48,13 @@ class CommisionsfinderPopup {
       const result = await chrome.storage.local.get(['disclaimerAcknowledged']);
       if (result.disclaimerAcknowledged !== true) {
         // Not acknowledged, show it immediately
-        if (this.disclaimerOverlay) {
-          this.disclaimerOverlay.style.display = 'flex';
-        }
+        this.showDisclaimer();
       }
       // If acknowledged, it stays hidden (hidden by default in CSS)
     } catch (error) {
       console.error('[Commsfinder] Error in quick disclaimer check:', error);
       // On error, show disclaimer to be safe
-      if (this.disclaimerOverlay) {
-        this.disclaimerOverlay.style.display = 'flex';
-      }
+      this.showDisclaimer();
     }
   }
   
@@ -154,11 +153,23 @@ class CommisionsfinderPopup {
     
     // Disclaimer elements
     this.disclaimerOverlay = document.getElementById('disclaimerOverlay');
+    this.disclaimerDialog = document.getElementById('disclaimerDialog');
     this.disclaimerPage1 = document.getElementById('disclaimerPage1');
     this.disclaimerPage2 = document.getElementById('disclaimerPage2');
     this.disclaimerNextBtn = document.getElementById('disclaimerNextBtn');
     this.disclaimerBackBtn = document.getElementById('disclaimerBackBtn');
     this.disclaimerOkBtn = document.getElementById('disclaimerOkBtn');
+
+    // Login-required pause elements
+    this.loginRequiredOverlay = document.getElementById('loginRequiredOverlay');
+    this.loginRequiredDialog = document.getElementById('loginRequiredDialog');
+    this.loginRequiredTitle = document.getElementById('loginRequiredTitle');
+    this.loginRequiredDescription = document.getElementById('loginRequiredDescription');
+    this.loginRequiredDetail = document.getElementById('loginRequiredDetail');
+    this.loginRequiredPlatformIcon = document.getElementById('loginRequiredPlatformIcon');
+    this.openLoginTabBtn = document.getElementById('openLoginTabBtn');
+    this.resumeLoginScanBtn = document.getElementById('resumeLoginScanBtn');
+    this.cancelLoginRequiredBtn = document.getElementById('cancelLoginRequiredBtn');
   }
 
   // Pretend you didn't see that.
@@ -217,6 +228,9 @@ class CommisionsfinderPopup {
       if (!e.target.closest('.platform-dropdown') && !e.target.closest('.platform-dropdown-trigger')) {
         document.querySelectorAll('.platform-dropdown').forEach(dropdown => {
           dropdown.style.display = 'none';
+        });
+        document.querySelectorAll('.platform-dropdown-trigger').forEach(trigger => {
+          trigger.setAttribute('aria-expanded', 'false');
         });
       }
     });
@@ -293,6 +307,16 @@ class CommisionsfinderPopup {
     if (this.disclaimerOkBtn) {
       this.disclaimerOkBtn.addEventListener('click', () => this.acceptDisclaimer());
     }
+
+    if (this.openLoginTabBtn) {
+      this.openLoginTabBtn.addEventListener('click', () => this.openLoginTab());
+    }
+    if (this.resumeLoginScanBtn) {
+      this.resumeLoginScanBtn.addEventListener('click', () => this.resumeLoginRequiredScan());
+    }
+    if (this.cancelLoginRequiredBtn) {
+      this.cancelLoginRequiredBtn.addEventListener('click', () => this.cancelLoginRequiredScan());
+    }
   }
   
   async loadSettings() {
@@ -352,6 +376,9 @@ class CommisionsfinderPopup {
         const toggleIcon = this.roadmapToggleBtn.querySelector('.toggle-icon');
         toggleIcon.textContent = '❯❯';
         this.roadmapToggleBtn.title = 'Expand Roadmap';
+        this.roadmapToggleBtn.setAttribute('aria-expanded', 'false');
+      } else {
+        this.roadmapToggleBtn.setAttribute('aria-expanded', 'true');
       }
 
       // Check promo hiding preferences and cache them
@@ -434,12 +461,14 @@ class CommisionsfinderPopup {
         // Determine actual scan state - use activeScansInProgress for UI state
         const isActivelyScanning = response.activeScansInProgress || false;
         const canResume = response.scanInProgress && !isActivelyScanning;
+        this.loginRequiredPause = response.loginRequiredPause || null;
         
         this.isScanning = isActivelyScanning;
         this.updateScanStatus(isActivelyScanning);
         
         // Update button states based on actual scan status
         if (isActivelyScanning) {
+          this.hideLoginRequiredOverlay();
           // Scan is actively running - show stop button
           this.showProgress(true);
           this.showResultsLoading(true);
@@ -472,6 +501,12 @@ class CommisionsfinderPopup {
             this.scanBtn.querySelector('.scan-text').textContent = 'Resume Scan';
           } else {
             this.scanBtn.querySelector('.scan-text').textContent = 'Scan for Open Commissions';
+          }
+
+          if (this.loginRequiredPause) {
+            this.showLoginRequiredOverlay(this.loginRequiredPause);
+          } else {
+            this.hideLoginRequiredOverlay();
           }
         }
       }
@@ -555,6 +590,7 @@ class CommisionsfinderPopup {
   
   async startScan() {
     if (this.isScanning) return;
+    this.hideLoginRequiredOverlay();
     
     const enabledPlatforms = Object.keys(this.settings.platforms)
       .filter(platform => this.settings.platforms[platform]);
@@ -646,6 +682,7 @@ class CommisionsfinderPopup {
         break;
         
       case 'SCAN_FINISHED':
+        this.hideLoginRequiredOverlay();
         this.isScanning = false;
         this.updateScanStatus(false);
         this.showProgress(false);
@@ -665,6 +702,7 @@ class CommisionsfinderPopup {
         break;
         
       case 'SCAN_ERROR':
+        this.hideLoginRequiredOverlay();
         this.isScanning = false;
         this.updateScanStatus(false);
         this.showProgress(false);
@@ -694,6 +732,19 @@ class CommisionsfinderPopup {
           this.scanBtn.querySelector('.scan-text').textContent = 'Scanning...';
         }
         this.updateScanProgress(message.platform, message.data);
+        break;
+
+      case 'LOGIN_REQUIRED':
+        this.loginRequiredPause = message.data || null;
+        this.isScanning = false;
+        this.updateScanStatus(false);
+        this.showProgress(false);
+        this.showResultsLoading(false);
+        this.stopBtn.style.display = 'none';
+        this.scanBtn.style.display = 'block';
+        this.scanBtn.disabled = false;
+        this.scanBtn.querySelector('.scan-text').textContent = 'Resume Scan';
+        this.showLoginRequiredOverlay(this.loginRequiredPause);
         break;
 
       case 'SCAN_ERROR_UPDATE':
@@ -772,6 +823,27 @@ class CommisionsfinderPopup {
     const div = document.createElement('div');
     div.textContent = value || '';
     return div.innerHTML;
+  }
+
+  escapeAttribute(value) {
+    return this.escapeHtml(value).replace(/`/g, '&#96;');
+  }
+
+  sanitizeUrl(url, fallback = '') {
+    if (!url || typeof url !== 'string') {
+      return fallback;
+    }
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      const allowedProtocols = ['http:', 'https:', 'chrome-extension:', 'moz-extension:'];
+      if (!allowedProtocols.includes(parsed.protocol)) {
+        return fallback;
+      }
+      return parsed.href;
+    } catch (error) {
+      return fallback;
+    }
   }
 
   getProfileTagsHtml(result) {
@@ -1167,11 +1239,12 @@ class CommisionsfinderPopup {
         <p>Run a scan to find artists with open commissions.</p>
       `;
     } else if (isSearchActive) {
+      const safeSearchTerm = this.escapeHtml(searchTerm);
       // Search active but no results
       messageHTML = `
         <div style="font-size: 24px; margin-bottom: 16px;">🔍</div>
         <h3>No Artists Found</h3>
-        <p>No artists match your search for "<strong style="color: #ffffff;">${searchTerm}</strong>".</p>
+        <p>No artists match your search for "<strong class="empty-search-term">${safeSearchTerm}</strong>".</p>
       `;
       
       // Add suggestions
@@ -1244,11 +1317,11 @@ class CommisionsfinderPopup {
     // Create platform icon HTML
     let platformIconsHtml = '';
     if (Array.isArray(platformIconPaths)) {
-      platformIconsHtml = platformIconPaths.map(iconPath => 
-        `<img src="${iconPath}" alt="Platform" class="platform-icon-img">`
+      platformIconsHtml = platformIconPaths.map(iconPath =>
+        `<img src="${this.sanitizeUrl(iconPath)}" alt="" class="platform-icon-img" aria-hidden="true">`
       ).join('');
     } else {
-      platformIconsHtml = `<img src="${platformIconPaths}" alt="Platform" class="platform-icon-img">`;
+      platformIconsHtml = `<img src="${this.sanitizeUrl(platformIconPaths)}" alt="" class="platform-icon-img" aria-hidden="true">`;
     }
     // Handle triggers - might be array or string after search processing
     let triggers;
@@ -1281,28 +1354,39 @@ class CommisionsfinderPopup {
     // Apply demo mode transformations
     const displayName = this.settings.demoMode ? this.getDemoDisplayName(result.displayName) : result.displayName;
     const avatarClasses = this.settings.demoMode ? 'result-avatar demo-blur' : 'result-avatar';
+    const safeDisplayName = this.escapeHtml(displayName);
+    const safeDisplayNameAttr = this.escapeAttribute(displayName);
+    const safePlatformNames = this.escapeHtml(platformNames);
+    const safeTriggers = this.escapeHtml(triggers);
+    const safeTriggersAttr = this.escapeAttribute(triggers);
+    const safeDetectionText = this.escapeHtml(`detected ${timeAgo}`);
+    const safeAvatarUrl = this.sanitizeUrl(result.avatarUrl, this.getDefaultAvatar());
     
     element.innerHTML = `
-      <img src="${result.avatarUrl || this.getDefaultAvatar()}" 
-           alt="${displayName}" 
+      <img src="${safeAvatarUrl}"
+           alt="${safeDisplayNameAttr}"
            class="${avatarClasses}">
-      <div class="result-info" style="cursor: pointer;">
-        <div class="result-name" title="${displayName}">${displayName}</div>
-        <div class="result-platform">
-          ${platformIconsHtml} ${platformNames}
-          ${result.platforms && result.platforms.length > 1 ? 
-            `<span class="platform-dropdown-trigger" title="Choose platform">▼</span>` : ''}
-        </div>
-        <div class="result-triggers" title="${triggers}">
-          ${hasTriggers ? `"${triggers}"<br><span class="detection-time">detected ${timeAgo}</span>` : triggers}
-        </div>
-        ${profileTagsHtml}
-        ${result.platforms && result.platforms.length > 1 ? this.createPlatformDropdown(result) : ''}
+      <div class="result-info">
+        <button class="result-profile-btn" type="button" aria-label="Open profile for ${safeDisplayNameAttr}">
+          <div class="result-name" title="${safeDisplayNameAttr}">${safeDisplayName}</div>
+          <div class="result-platform-summary">
+            ${platformIconsHtml} ${safePlatformNames}
+          </div>
+          <div class="result-triggers" title="${safeTriggersAttr}">
+            ${hasTriggers ? `"${safeTriggers}"<br><span class="detection-time">${safeDetectionText}</span>` : safeTriggers}
+          </div>
+          ${profileTagsHtml}
+        </button>
+        ${result.platforms && result.platforms.length > 1 ?
+          `<div class="result-platform-menu">
+            <button class="platform-dropdown-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose platform for ${safeDisplayNameAttr}">Choose platform ▾</button>
+            ${this.createPlatformDropdown(result)}
+          </div>` : ''}
       </div>
       <div class="result-confidence">
-        <div class="confidence-score ${confidenceClass}">
+        <button class="confidence-score ${confidenceClass}" type="button" aria-label="View confidence details for ${safeDisplayNameAttr}">
           ${confidencePercent}%
-        </div>
+        </button>
       </div>
       <div class="result-actions">
         <button class="action-btn favorite-btn ${isFavorited ? 'active' : ''}" 
@@ -1339,14 +1423,9 @@ class CommisionsfinderPopup {
       });
     }
     
-    // Add click handler for the info section only
-    const infoSection = element.querySelector('.result-info');
-    if (infoSection) {
-      infoSection.addEventListener('click', (e) => {
-        // Don't open profile if clicking on dropdown elements
-        if (e.target.closest('.platform-dropdown-trigger') || e.target.closest('.platform-dropdown')) {
-          return;
-        }
+    const profileButton = element.querySelector('.result-profile-btn');
+    if (profileButton) {
+      profileButton.addEventListener('click', () => {
         this.openArtistProfile(result);
       });
     }
@@ -1364,6 +1443,7 @@ class CommisionsfinderPopup {
         });
         // Toggle this dropdown
         dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+        dropdownTrigger.setAttribute('aria-expanded', dropdown.style.display !== 'none' ? 'true' : 'false');
       });
       
       // Add handlers for dropdown items
@@ -1374,6 +1454,7 @@ class CommisionsfinderPopup {
           const platform = item.dataset.platform;
           this.openArtistProfile(result, platform);
           dropdown.style.display = 'none';
+          dropdownTrigger.setAttribute('aria-expanded', 'false');
         }
       });
     }
@@ -1384,10 +1465,12 @@ class CommisionsfinderPopup {
     
     // Add click handler for the confidence score
     const confidenceScore = element.querySelector('.confidence-score');
-    confidenceScore.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.expandConfidenceDetails(result, element);
-    });
+    if (confidenceScore) {
+      confidenceScore.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.expandConfidenceDetails(result, element);
+      });
+    }
     
     favoriteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1429,17 +1512,20 @@ class CommisionsfinderPopup {
       const status = platformData ? platformData.commissionStatus : 'unclear';
       const statusIcon = status === 'open' ? '✅' : status === 'closed' ? '❌' : '❓';
       
+      const platformName = this.formatPlatformName(platform);
+      const safePlatformName = this.escapeHtml(platformName);
+      const safePlatformAttr = this.escapeAttribute(platform);
       return `
-        <div class="platform-dropdown-item" data-platform="${platform}">
-          <img src="${this.getPlatformIcon(platform)}" alt="${this.formatPlatformName(platform)}" class="platform-icon-img" style="width: 16px; height: 16px; margin-right: 4px; vertical-align: middle;">
-          <span class="platform-name">${this.formatPlatformName(platform)}</span>
+        <button class="platform-dropdown-item" type="button" role="menuitem" data-platform="${safePlatformAttr}">
+          <img src="${this.sanitizeUrl(this.getPlatformIcon(platform))}" alt="" class="platform-icon-img" aria-hidden="true">
+          <span class="platform-name">${safePlatformName}</span>
           <span class="platform-status">${statusIcon} ${confidence}%</span>
-        </div>
+        </button>
       `;
     }).join('');
     
     return `
-      <div class="platform-dropdown" style="display: none;">
+      <div class="platform-dropdown" style="display: none;" role="menu" aria-label="Platform links">
         ${dropdownItems}
       </div>
     `;
@@ -1885,9 +1971,15 @@ class CommisionsfinderPopup {
     
     switch (progressData.phase) {
       case 'checking_login':
+      case 'checking_auth':
         statusText = `${platform}: Checking login status...`;
         targetProgress = 5;
         status = 'scanning';
+        break;
+      case 'login_required':
+        statusText = `${platform}: Login needed before scanning can continue`;
+        targetProgress = progressData.percentage || 5;
+        status = 'error';
         break;
       case 'gathering_artists':
         statusText = `${platform}: Gathering artist list...`;
@@ -1982,7 +2074,11 @@ class CommisionsfinderPopup {
     
     // Add error indicator if needed
     if (progressData.errors > 0) {
-      this.progressText.innerHTML = `${statusText} <span style="color: #f59e0b;">(${progressData.errors} errors)</span>`;
+      this.progressText.textContent = statusText;
+      const errorCount = document.createElement('span');
+      errorCount.className = 'progress-error-count';
+      errorCount.textContent = ` (${progressData.errors} errors)`;
+      this.progressText.appendChild(errorCount);
     }
   }
   
@@ -2099,11 +2195,178 @@ class CommisionsfinderPopup {
   }
   
   openSettings() {
+    this.lastFocusedElement = document.activeElement;
     this.settingsModal.style.display = 'flex';
+    this.activateFocusTrap(this.settingsModal, () => this.closeSettings());
   }
   
   closeSettings() {
     this.settingsModal.style.display = 'none';
+    this.deactivateFocusTrap();
+    if (this.lastFocusedElement && typeof this.lastFocusedElement.focus === 'function') {
+      this.lastFocusedElement.focus();
+    }
+  }
+
+  getFocusableElements(container) {
+    if (!container) {
+      return [];
+    }
+
+    return Array.from(
+      container.querySelectorAll(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => {
+      const style = window.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+  }
+
+  activateFocusTrap(container, onEscape) {
+    if (!container) {
+      return;
+    }
+
+    this.deactivateFocusTrap();
+
+    const keyHandler = (event) => {
+      if (event.key === 'Escape' && typeof onEscape === 'function') {
+        event.preventDefault();
+        onEscape();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const focusable = this.getFocusableElements(container);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    container.addEventListener('keydown', keyHandler);
+    this.activeFocusTrap = { container, keyHandler };
+
+    const focusable = this.getFocusableElements(container);
+    if (focusable.length > 0) {
+      focusable[0].focus();
+    } else if (typeof container.focus === 'function') {
+      container.focus();
+    }
+  }
+
+  deactivateFocusTrap() {
+    if (!this.activeFocusTrap) {
+      return;
+    }
+
+    const { container, keyHandler } = this.activeFocusTrap;
+    container.removeEventListener('keydown', keyHandler);
+    this.activeFocusTrap = null;
+  }
+
+  showLoginRequiredOverlay(pauseInfo) {
+    if (!this.loginRequiredOverlay || !pauseInfo) {
+      return;
+    }
+
+    const platformName = pauseInfo.platformName || this.formatPlatformName(pauseInfo.platform);
+    this.loginRequiredPause = pauseInfo;
+
+    if (this.loginRequiredTitle) {
+      this.loginRequiredTitle.textContent = `Log in to ${platformName}`;
+    }
+    if (this.loginRequiredDescription) {
+      this.loginRequiredDescription.textContent =
+        `Commsfinder paused the scan because ${platformName} needs an active login.`;
+    }
+    if (this.loginRequiredDetail) {
+      this.loginRequiredDetail.textContent =
+        'Log in on the platform tab, then return here and resume the scan.';
+    }
+    if (this.openLoginTabBtn) {
+      this.openLoginTabBtn.textContent = `Open ${platformName}`;
+    }
+    if (this.loginRequiredPlatformIcon) {
+      this.loginRequiredPlatformIcon.src = this.getPlatformIcon(pauseInfo.platform);
+      this.loginRequiredPlatformIcon.alt = '';
+    }
+
+    this.lastFocusedElement = document.activeElement;
+    document.body.classList.add('login-required-active');
+    this.loginRequiredOverlay.style.display = 'flex';
+    this.activateFocusTrap(this.loginRequiredDialog || this.loginRequiredOverlay);
+  }
+
+  hideLoginRequiredOverlay() {
+    if (!this.loginRequiredOverlay) {
+      return;
+    }
+
+    document.body.classList.remove('login-required-active');
+    this.loginRequiredOverlay.style.display = 'none';
+    if (this.activeFocusTrap?.container === this.loginRequiredDialog || this.activeFocusTrap?.container === this.loginRequiredOverlay) {
+      this.deactivateFocusTrap();
+    }
+    if (this.lastFocusedElement && typeof this.lastFocusedElement.focus === 'function') {
+      this.lastFocusedElement.focus();
+    }
+  }
+
+  async openLoginTab() {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN_TAB' });
+      if (!response?.success) {
+        throw new Error(response?.error || 'Failed to open platform login');
+      }
+    } catch (error) {
+      console.error('Error opening login tab:', error);
+      this.showError(error.message || 'Failed to open platform login');
+    }
+  }
+
+  resumeLoginRequiredScan() {
+    this.hideLoginRequiredOverlay();
+    this.startScan();
+  }
+
+  async cancelLoginRequiredScan() {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'CANCEL_SCAN' });
+      if (!response?.success) {
+        throw new Error(response?.error || 'Failed to cancel scan');
+      }
+
+      this.loginRequiredPause = null;
+      this.isScanning = false;
+      this.updateScanStatus(false);
+      this.showProgress(false);
+      this.showResultsLoading(false);
+      this.stopBtn.style.display = 'none';
+      this.scanBtn.style.display = 'block';
+      this.scanBtn.disabled = false;
+      this.scanBtn.querySelector('.scan-text').textContent = 'Scan for Open Commissions';
+      this.hideLoginRequiredOverlay();
+    } catch (error) {
+      console.error('Error cancelling login-required scan:', error);
+      this.showError(error.message || 'Failed to cancel scan');
+    }
   }
 
   async toggleRoadmap() {
@@ -2115,11 +2378,13 @@ class CommisionsfinderPopup {
       this.roadmapSection.classList.remove('minimized');
       toggleIcon.textContent = '⇓';
       this.roadmapToggleBtn.title = 'Minimize Roadmap';
+      this.roadmapToggleBtn.setAttribute('aria-expanded', 'true');
     } else {
       // Minimize
       this.roadmapSection.classList.add('minimized');
       toggleIcon.textContent = '❯❯';
       this.roadmapToggleBtn.title = 'Expand Roadmap';
+      this.roadmapToggleBtn.setAttribute('aria-expanded', 'false');
     }
 
     // Save the state to storage
@@ -2363,61 +2628,66 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
     console.log('Model download progress update:', status, progress);
   }
 
+  async loadBenchmarkModule() {
+    // Keep benchmark optional, this file is local and may be missing in many environments.
+    return import(/* webpackIgnore: true */ '/benchmark.js');
+  }
+
   async checkBenchmarkAvailability() {
     try {
-        // Try to import the benchmark module
-        const benchmarkModule = await import('/benchmark.js');
-        if (benchmarkModule && benchmarkModule.BenchmarkRunner) {
-            // Show benchmark button if module exists
-            if (this.benchmarkGroup) {
-                this.benchmarkGroup.style.display = 'block';
-            }
-        }
+      const benchmarkModule = await this.loadBenchmarkModule();
+      const hasRunner = Boolean(benchmarkModule && benchmarkModule.BenchmarkRunner);
+      if (this.benchmarkGroup) {
+        this.benchmarkGroup.style.display = hasRunner ? 'block' : 'none';
+      }
     } catch (error) {
-        console.error('Failed to load benchmark module:', error);
-        // Module not found, hide benchmark button
-        if (this.benchmarkGroup) {
-            this.benchmarkGroup.style.display = 'none';
-        }
+      // Module not found, hide benchmark button.
+      if (this.benchmarkGroup) {
+        this.benchmarkGroup.style.display = 'none';
+      }
     }
   }
 
   async startBenchmark() {
     try {
-        // Disable the button and show progress
-        this.runBenchmarkBtn.disabled = true;
-        this.benchmarkProgress.style.display = 'block';
-        this.benchmarkResults.style.display = 'none';
-        this.benchmarkTable.innerHTML = '';
+      // Disable the button and show progress
+      this.runBenchmarkBtn.disabled = true;
+      this.benchmarkProgress.style.display = 'block';
+      this.benchmarkResults.style.display = 'none';
+      this.benchmarkTable.innerHTML = '';
 
-        const { BenchmarkRunner } = await import('/benchmark.js');
-        const runner = new BenchmarkRunner();
+      const benchmarkModule = await this.loadBenchmarkModule();
+      if (!benchmarkModule || !benchmarkModule.BenchmarkRunner) {
+        throw new Error('Benchmark module is unavailable in this build.');
+      }
 
-        const report = await runner.runFullScanBenchmark((message, progress) => {
-            this.benchmarkProgress.querySelector('.benchmark-progress-fill').style.width = `${progress}%`;
-            this.benchmarkProgress.querySelector('.benchmark-text').textContent = message;
+      const runner = new benchmarkModule.BenchmarkRunner();
+
+      const report = await runner.runFullScanBenchmark((message, progress) => {
+        this.benchmarkProgress.querySelector('.benchmark-progress-fill').style.width = `${progress}%`;
+        this.benchmarkProgress.querySelector('.benchmark-text').textContent = message;
+      });
+      const results = [];
+      for (const [platform, platformResults] of Object.entries(report.platformResults || {})) {
+        results.push({
+          platform: platform.charAt(0).toUpperCase() + platform.slice(1),
+          step: `Total: ${platformResults.profileCount || 0} profiles scanned`,
+          profileCount: platformResults.profileCount || 0,
+          totalTime: platformResults.totalTimeSeconds || 0,
+          isHeader: true
         });
-        const results = [];
-        for (const [platform, platformResults] of Object.entries(report.platformResults || {})) {
-            results.push({
-                platform: platform.charAt(0).toUpperCase() + platform.slice(1),
-                step: `Total: ${platformResults.profileCount || 0} profiles scanned`,
-                profileCount: platformResults.profileCount || 0,
-                totalTime: platformResults.totalTimeSeconds || 0,
-                isHeader: true
-            });
-            for (const step of platformResults.steps || []) {
-                results.push({
-                    platform: platform.charAt(0).toUpperCase() + platform.slice(1),
-                    step: step.step,
-                    totalSeconds: step.totalSeconds || 0,
-                    averageMs: step.averageMs || 0,
-                    count: step.count || 0,
-                    percentage: step.percentage || 0,
-                    isHeader: false
-                });
-            }
+        for (const step of platformResults.steps || []) {
+          results.push({
+            platform: platform.charAt(0).toUpperCase() + platform.slice(1),
+            step: step.step,
+            totalSeconds: step.totalSeconds || 0,
+            averageMs: step.averageMs || 0,
+            count: step.count || 0,
+            percentage: step.percentage || 0,
+            isHeader: false
+          });
         }
+      }
 
         // Create table header
         const headerRow = document.createElement('tr');
@@ -2435,11 +2705,13 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
         const summaryRow = document.createElement('tr');
         summaryRow.style.fontWeight = 'bold';
         summaryRow.style.backgroundColor = '#111827';
+        const safeResultCount = this.escapeHtml(String(report.run.resultCount));
+        const safeWallClock = this.escapeHtml(`${report.run.wallClockSeconds.toFixed(2)}s`);
         summaryRow.innerHTML = `
             <td>Full Scan</td>
             <td colspan="2">Wall clock time</td>
-            <td>${report.run.resultCount}</td>
-            <td>${report.run.wallClockSeconds.toFixed(2)}s</td>
+            <td>${safeResultCount}</td>
+            <td>${safeWallClock}</td>
             <td colspan="2">Report downloaded</td>
         `;
         this.benchmarkTable.appendChild(summaryRow);
@@ -2453,11 +2725,13 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
                 row.style.fontWeight = 'bold';
                 row.style.backgroundColor = '#374151';
                 row.style.color = '#e5e7eb';
+                const safePlatform = this.escapeHtml(result.platform);
+                const safeStep = this.escapeHtml(result.step);
                 row.innerHTML = `
-                    <td>${result.platform}</td>
-                    <td colspan="2">${result.step}</td>
-                    <td>${result.profileCount}</td>
-                    <td>${result.totalTime.toFixed(2)}s</td>
+                    <td>${safePlatform}</td>
+                    <td colspan="2">${safeStep}</td>
+                    <td>${this.escapeHtml(String(result.profileCount))}</td>
+                    <td>${this.escapeHtml(`${result.totalTime.toFixed(2)}s`)}</td>
                     <td colspan="2">-</td>
                 `;
             } else {
@@ -2473,14 +2747,16 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
                 }
                 
                 row.className = rowClass;
+                const safePlatform = this.escapeHtml(result.platform);
+                const safeStep = this.escapeHtml(result.step);
                 row.innerHTML = `
-                    <td>${result.platform}</td>
-                    <td>${result.step}</td>
+                    <td>${safePlatform}</td>
+                    <td>${safeStep}</td>
                     <td>-</td>
-                    <td>${result.totalSeconds.toFixed(2)}s</td>
-                    <td>${result.averageMs.toFixed(0)}ms</td>
-                    <td>${result.count}</td>
-                    <td>${result.percentage.toFixed(1)}%</td>
+                    <td>${this.escapeHtml(`${result.totalSeconds.toFixed(2)}s`)}</td>
+                    <td>${this.escapeHtml(`${result.averageMs.toFixed(0)}ms`)}</td>
+                    <td>${this.escapeHtml(String(result.count))}</td>
+                    <td>${this.escapeHtml(`${result.percentage.toFixed(1)}%`)}</td>
                 `;
             }
             
@@ -2488,15 +2764,28 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
         });
 
         // Show results
-        this.benchmarkResults.style.display = 'block';
-        this.benchmarkProgress.style.display = 'none';
-        this.runBenchmarkBtn.disabled = false;
+      this.benchmarkResults.style.display = 'block';
+      this.benchmarkProgress.style.display = 'none';
+      this.runBenchmarkBtn.disabled = false;
 
     } catch (error) {
-        console.error('Benchmark error:', error);
-        this.showError('Failed to run benchmark: ' + error.message);
-        this.runBenchmarkBtn.disabled = false;
-        this.benchmarkProgress.style.display = 'none';
+      console.error('Benchmark error:', error);
+      const message = String(error?.message || error || '');
+      const isMissingModule =
+        message.includes('Benchmark module is unavailable') ||
+        message.includes('Failed to fetch dynamically imported module') ||
+        message.includes('Cannot find module');
+      this.showNotification(
+        isMissingModule
+          ? 'Benchmark tools are not installed in this environment.'
+          : `Failed to run benchmark: ${message}`,
+        'error'
+      );
+      this.runBenchmarkBtn.disabled = false;
+      this.benchmarkProgress.style.display = 'none';
+      if (isMissingModule && this.benchmarkGroup) {
+        this.benchmarkGroup.style.display = 'none';
+      }
     }
   }
 
@@ -2698,9 +2987,11 @@ getSpeedClass(samplesPerSecond) {
 
   showDisclaimer() {
     if (this.disclaimerOverlay) {
+      this.lastFocusedElement = document.activeElement;
       document.body.classList.add('disclaimer-active');
       this.disclaimerOverlay.style.display = 'flex';
       this.showDisclaimerPage1();
+      this.activateFocusTrap(this.disclaimerDialog || this.disclaimerOverlay);
     }
   }
 
@@ -2708,6 +2999,10 @@ getSpeedClass(samplesPerSecond) {
     if (this.disclaimerOverlay) {
       document.body.classList.remove('disclaimer-active');
       this.disclaimerOverlay.style.display = 'none';
+      this.deactivateFocusTrap();
+      if (this.lastFocusedElement && typeof this.lastFocusedElement.focus === 'function') {
+        this.lastFocusedElement.focus();
+      }
     }
   }
 
@@ -2715,6 +3010,13 @@ getSpeedClass(samplesPerSecond) {
     if (this.disclaimerPage1 && this.disclaimerPage2) {
       this.disclaimerPage1.style.display = 'block';
       this.disclaimerPage2.style.display = 'none';
+      if (this.disclaimerDialog) {
+        this.disclaimerDialog.setAttribute('aria-labelledby', 'disclaimerTitlePage1');
+        this.disclaimerDialog.setAttribute('aria-describedby', 'disclaimerDescriptionPage1');
+      }
+      if (this.disclaimerNextBtn) {
+        this.disclaimerNextBtn.focus();
+      }
     }
   }
 
@@ -2722,6 +3024,13 @@ getSpeedClass(samplesPerSecond) {
     if (this.disclaimerPage1 && this.disclaimerPage2) {
       this.disclaimerPage1.style.display = 'none';
       this.disclaimerPage2.style.display = 'block';
+      if (this.disclaimerDialog) {
+        this.disclaimerDialog.setAttribute('aria-labelledby', 'disclaimerTitlePage2');
+        this.disclaimerDialog.setAttribute('aria-describedby', 'disclaimerDescriptionPage2');
+      }
+      if (this.disclaimerBackBtn) {
+        this.disclaimerBackBtn.focus();
+      }
     }
   }
 

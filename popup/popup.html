@@ -10,9 +10,14 @@
   <div class="container">
     <header class="header">
       <div class="header-content">
-        <img src="../icons/icon48.png" alt="Commsfinder" class="header-icon">
-        <h1 class="header-title">Commsfinder</h1>
-        <button class="settings-btn" id="settingsBtn" title="Settings">
+        <div class="brand-lockup">
+          <img src="../icons/icon48.png" alt="Commsfinder" class="header-icon">
+          <div class="brand-copy">
+            <h1 class="header-title">Commsfinder</h1>
+            <p class="header-subtitle">Find artists open to commission</p>
+          </div>
+        </div>
+        <button class="settings-btn" id="settingsBtn" type="button" title="Settings" aria-label="Open settings">
           ⚙️
         </button>
       </div>
@@ -23,7 +28,7 @@
         <div class="scan-status" id="scanStatus">
           <div class="status-indicator" id="statusIndicator">
             <span class="status-dot"></span>
-            <span class="status-text" id="statusText">Ready to scan</span>
+          <span class="status-text" id="statusText" aria-live="polite" aria-atomic="true">Ready for local scan</span>
           </div>
           <div class="last-scan" id="lastScan">
             Never scanned
@@ -33,12 +38,15 @@
 
       <!-- Platform Selection -->
       <section class="platform-section">
-        <h3 class="section-title">Platforms to Scan</h3>
+        <h2 class="section-title">Scan Sources</h2>
         <div class="platform-options">
           <label class="platform-option" data-platform="furaffinity">
             <div class="platform-progress"></div>
             <div class="platform-content">
-              <input type="checkbox" id="platformFuraffinity" checked>
+              <input type="checkbox" id="platformFuraffinity" class="switch-input" checked>
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
               <img src="../logos/fa.webp" alt="FurAffinity" class="platform-icon">
               <span class="platform-name">FurAffinity</span>
             </div>
@@ -46,28 +54,37 @@
           <label class="platform-option" data-platform="bluesky">
             <div class="platform-progress"></div>
             <div class="platform-content">
-              <input type="checkbox" id="platformBluesky" checked>
+              <input type="checkbox" id="platformBluesky" class="switch-input" checked>
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
               <img src="../logos/bsky.svg" alt="Bluesky" class="platform-icon">
               <span class="platform-name">Bluesky</span>
             </div>
           </label>
-          <label class="platform-option platform-option-disabled" data-platform="twitter">
+          <div class="platform-option platform-option-disabled" data-platform="twitter">
             <div class="platform-progress"></div>
             <div class="platform-content">
-              <input type="checkbox" id="platformTwitter" disabled>
+              <label for="platformTwitter" class="sr-only">Twitter/X (disabled)</label>
+              <input type="checkbox" id="platformTwitter" class="switch-input" disabled aria-disabled="true">
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
               <img src="../logos/twitter.svg" alt="Twitter/X" class="platform-icon">
               <div class="platform-name-container">
                 <span class="platform-name">Twitter/X</span>
-                <span class="platform-disabled-text" title="Twitter/X is disabled due to API limitations. Click 'why' for further details.">Disabled - <span class="platform-why-link" id="twitterWhyLink">why?</span></span>
+                <span class="platform-disabled-text" title="Twitter/X is disabled due to API limitations.">Disabled -
+                  <button class="platform-why-link" id="twitterWhyLink" type="button" aria-label="Learn why Twitter is disabled">why?</button>
+                </span>
               </div>
             </div>
-          </label>
+          </div>
         </div>
       </section>
 
       <!-- Model Status Section -->
       <section class="model-status-section" id="modelStatusSection" style="display: none;">
-        <h3 class="section-title">AI Model Status</h3>
+        <h2 class="section-title">AI Model Status</h2>
         <p class="model-info">Using: DistilBERT Commissions (Fine-tuned)</p>
         <div class="model-status" id="modelStatus">
             <span id="modelStatusText">Model not downloaded.</span>
@@ -84,12 +101,10 @@
       <!-- Scan Button -->
       <section class="action-section">
         <div class="scan-controls">
-            <button id="scanBtn" class="primary-btn">
-                <span class="scan-icon">🔍</span>
-                <span class="scan-text">Scan for Open Commissions</span>
+            <button id="scanBtn" class="primary-btn" type="button">
+                <span class="scan-text">Scan Selected Platforms</span>
             </button>
             <button id="stopBtn" class="secondary-btn" style="display: none;">
-                <span class="stop-icon">⏹</span>
                 <span class="stop-text">Pause Scan</span>
             </button>
         </div>
@@ -105,16 +120,18 @@
       <!-- Results Section -->
       <section class="results-section" id="resultsSection" style="display: none;">
         <div class="results-header">
-          <h3 class="results-title">Open Commissions Found</h3>
+          <h2 class="results-title">Commission Leads</h2>
           <div class="results-count" id="resultsCount">0 artists</div>
         </div>
         
         <div class="results-filter">
+          <label class="sr-only" for="confidenceFilter">Filter by confidence</label>
           <select id="confidenceFilter" class="filter-select">
             <option value="0">All Results</option>
             <option value="0.5">Medium Confidence+</option>
             <option value="0.7">High Confidence</option>
           </select>
+          <label class="sr-only" for="platformFilter">Filter by platform</label>
           <select id="platformFilter" class="filter-select">
             <option value="">All Platforms</option>
             <option value="furaffinity">FurAffinity</option>
@@ -123,14 +140,18 @@
           </select>
         </div>
         
-        <div class="results-filter" style="margin-top: 8px; position: relative;">
-          <input type="text" id="searchFilter" class="search-input" placeholder="Search by artist name, username, bio..." style="width: 100%; padding: 8px 32px 8px 12px; border: 1px solid #374151; border-radius: 6px; background: #1f2937; color: #e5e7eb; font-size: 13px;">
-          <button id="clearSearchBtn" class="clear-search-btn" title="Clear search" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #6b7280; cursor: pointer; font-size: 16px; padding: 2px;">×</button>
+        <div class="results-filter search-filter-row">
+          <label class="sr-only" for="searchFilter">Search results</label>
+          <input type="text" id="searchFilter" class="search-input search-filter-input" placeholder="Search by artist name, username, bio...">
+          <button id="clearSearchBtn" class="clear-search-btn" type="button" title="Clear search" aria-label="Clear search">×</button>
         </div>
         
-        <div class="results-filter" style="margin-top: 8px;">
-          <label class="toggle-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-            <input type="checkbox" id="showBlacklisted" style="cursor: pointer;">
+        <div class="results-filter toggle-filter-row">
+          <label class="toggle-label">
+            <input type="checkbox" id="showBlacklisted" class="switch-input">
+            <span class="switch-track" aria-hidden="true">
+              <span class="switch-thumb"></span>
+            </span>
             <span>Show Blacklisted Artists</span>
           </label>
         </div>
@@ -155,23 +176,56 @@
 
       <!-- Empty State -->
       <div class="empty-state" id="emptyState">
-        <div class="empty-icon">🎯</div>
+        <div class="empty-icon" aria-hidden="true">
+          <img src="../icons/commsfinder_white2.png" alt="">
+        </div>
         <h3 class="empty-title">Find Open Commissions</h3>
         <p class="empty-description">
           Scan your followed artists across social media to find who has open commission slots.
         </p>
-        <ul class="empty-features">
-          <li>✨ AI-powered detection</li>
-          <li>🔍 Pattern recognition</li>
-          <li>📊 Confidence scoring</li>
-          <li>🚀 Multi-platform support</li>
-        </ul>
+        <ol class="scan-flow-diagram" aria-label="How scanning works">
+          <li class="scan-flow-step">
+            <div class="scan-flow-icon source-icons" aria-hidden="true">
+              <div class="source-icon-track">
+                <img src="../logos/fa.webp" alt="">
+                <img src="../logos/bsky.svg" alt="">
+                <img src="../logos/fa.webp" alt="">
+              </div>
+            </div>
+            <div class="scan-flow-copy">
+              <span class="scan-flow-label">1. Source</span>
+              <span class="scan-flow-text">Pick which platforms to scan.</span>
+            </div>
+          </li>
+          <li class="scan-flow-step">
+            <div class="scan-flow-icon signal-icon" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div class="scan-flow-copy">
+              <span class="scan-flow-label">2. Scan</span>
+              <span class="scan-flow-text">Commsfinder checks bios, posts, journals, and metadata for signals of open comms.</span>
+            </div>
+          </li>
+          <li class="scan-flow-step">
+            <div class="scan-flow-icon result-icon" aria-hidden="true">
+              <span class="result-dot high"></span>
+              <span class="result-dot mid"></span>
+              <span class="result-dot low"></span>
+            </div>
+            <div class="scan-flow-copy">
+              <span class="scan-flow-label">3. Review</span>
+              <span class="scan-flow-text">Results are tagged, given a confidence score, and sorted by confidence.</span>
+            </div>
+          </li>
+        </ol>
       </div>
     </main>
 
     <!-- CommsClassifier Promo Section -->
     <div id="commsClassifierPromo" class="classifier-promo" style="display: none;">
-      <button class="section-close-btn" id="promoCloseBtn" title="Close">&times;</button>
+      <button class="section-close-btn" id="promoCloseBtn" type="button" title="Close" aria-label="Close promo section">&times;</button>
       <div class="promo-content">
         <div class="promo-header">
           <img src="../icons/icon128.png" alt="CommsClassifier Logo" class="promo-logo">
@@ -179,11 +233,11 @@
         </div>
         <p>Want to help make commission detection more accurate? Try my companion extension CommsClassifier to submit manual classifications used to improve the scan accuracy.</p>
         <div class="promo-buttons">
-          <a href="https://chromewebstore.google.com/detail/cpfbbohbgdlhfhibcobnogoijflamnkl" target="_blank" class="promo-btn chrome-btn">
+          <a href="https://chromewebstore.google.com/detail/cpfbbohbgdlhfhibcobnogoijflamnkl" target="_blank" rel="noopener noreferrer" class="promo-btn chrome-btn">
             <img src="../logos/chrome.svg" alt="Chrome" class="store-icon">
             Chrome Store
           </a>
-          <a href="https://addons.mozilla.org/en-US/firefox/addon/commscrowdsourcer/" target="_blank" class="promo-btn firefox-btn">
+          <a href="https://addons.mozilla.org/en-US/firefox/addon/commscrowdsourcer/" target="_blank" rel="noopener noreferrer" class="promo-btn firefox-btn">
             <img src="../logos/firefox.svg" alt="Firefox" class="store-icon">
             Firefox Add-ons
           </a>
@@ -200,15 +254,15 @@
 
     <!-- Roadmap Section -->
     <div class="roadmap-section">
-      <div class="roadmap-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <h3>🗺️ What's Next?</h3>
-        <button class="roadmap-toggle-btn" id="roadmapToggleBtn" title="Minimize/Maximize Roadmap">
+      <div class="roadmap-header">
+        <h3>Roadmap</h3>
+        <button class="roadmap-toggle-btn" id="roadmapToggleBtn" type="button" title="Minimize or maximize roadmap" aria-controls="roadmapContent" aria-expanded="true">
           <span class="toggle-icon">▼</span>
         </button>
       </div>
       
       <div class="roadmap-eta">
-        <span class="eta-tag">ETA: when there's motivation 💀</span>
+        <span class="eta-tag">Timeline is prioritized by user impact.</span>
       </div>
       
       <div class="roadmap-content-wrapper" id="roadmapContent">
@@ -266,27 +320,30 @@
 
     <!-- Feedback Section -->
     <div class="feedback-section" style="display: none;">
-      <button class="section-close-btn" id="feedbackCloseBtn" title="Close">&times;</button>
+      <button class="section-close-btn" id="feedbackCloseBtn" type="button" title="Close" aria-label="Close feedback section">&times;</button>
       <div class="feedback-header">
-        <h3>💭 Share Your Thoughts</h3>
+        <h3>Share Feedback</h3>
       </div>
-      <p class="feedback-description">Found a bug? Have a feature request? Your feedback helps make CommsFinder better!</p>
+      <p class="feedback-description">Found a bug? Have a feature request? Your feedback helps make Commsfinder better.</p>
       
       <div class="feedback-buttons">
         <a href="https://github.com/zohfur/commsfinder/issues/new?template=bug_report.md" 
            target="_blank" 
+           rel="noopener noreferrer"
            class="feedback-btn bug-report-btn">
           <span class="feedback-btn-icon">🐛</span>
           Report Bug
         </a>
         <a href="https://github.com/zohfur/commsfinder/issues/new?template=feature_request.md" 
            target="_blank" 
+           rel="noopener noreferrer"
            class="feedback-btn feature-request-btn">
           <span class="feedback-btn-icon">💡</span>
           Suggest Feature
         </a>
         <a href="https://forms.gle/Kt61z8ZYiSTpKLNp8" 
            target="_blank" 
+           rel="noopener noreferrer"
            class="feedback-btn general-feedback-btn">
           <span class="feedback-btn-icon">📝</span>
           Quick Feedback
@@ -303,49 +360,85 @@
 
     <!-- Disclaimer Modal -->
     <div class="disclaimer-overlay" id="disclaimerOverlay">
-      <div class="disclaimer-content">
+      <div class="disclaimer-content" id="disclaimerDialog" role="dialog" aria-modal="true" aria-labelledby="disclaimerTitlePage1" aria-describedby="disclaimerDescriptionPage1" tabindex="-1">
         <div class="disclaimer-page" id="disclaimerPage1">
           <div class="disclaimer-header">
             <img src="../icons/icon48.png" alt="Commsfinder" class="disclaimer-icon">
-            <h2>Important Notice</h2>
+            <h2 id="disclaimerTitlePage1">Important Notice</h2>
           </div>
           <div class="disclaimer-body">
-            <p class="disclaimer-text">This extension uses <strong>discriminative</strong> AI.</p>
+            <p class="disclaimer-text" id="disclaimerDescriptionPage1">This extension uses <strong>discriminative</strong> AI.</p>
             <p class="disclaimer-text">Think image and pattern recognition, NOT generative AI.</p>
           </div>
           <div class="disclaimer-actions">
-            <button class="disclaimer-btn primary" id="disclaimerNextBtn">Next</button>
+            <button class="disclaimer-btn primary" id="disclaimerNextBtn" type="button">Next</button>
           </div>
         </div>
         
         <div class="disclaimer-page" id="disclaimerPage2" style="display: none;">
           <div class="disclaimer-header">
             <img src="../icons/icon48.png" alt="Commsfinder" class="disclaimer-icon">
-            <h2>Model Download</h2>
+            <h2 id="disclaimerTitlePage2">Model Download</h2>
           </div>
           <div class="disclaimer-body">
-            <p class="disclaimer-text">Upon your first scan, a custom classification model (75mb) will be downloaded.</p>
+            <p class="disclaimer-text" id="disclaimerDescriptionPage2">Upon your first scan, a custom classification model (75mb) will be downloaded.</p>
             <p class="disclaimer-text">No action is needed on your part, and this model will be cached for future use.</p>
           </div>
           <div class="disclaimer-actions">
-            <button class="disclaimer-btn secondary" id="disclaimerBackBtn">Back</button>
-            <button class="disclaimer-btn primary" id="disclaimerOkBtn">OK</button>
+            <button class="disclaimer-btn secondary" id="disclaimerBackBtn" type="button">Back</button>
+            <button class="disclaimer-btn primary" id="disclaimerOkBtn" type="button">OK</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Login Required Modal -->
+    <div class="login-required-overlay" id="loginRequiredOverlay" style="display: none;">
+      <div class="login-required-content" id="loginRequiredDialog" role="dialog" aria-modal="true" aria-labelledby="loginRequiredTitle" aria-describedby="loginRequiredDescription" tabindex="-1">
+        <button class="login-required-close" id="cancelLoginRequiredBtn" type="button" aria-label="Cancel scan and close login prompt">&times;</button>
+        <div class="disclaimer-page">
+          <div class="disclaimer-header">
+            <div class="login-connection-visual" aria-hidden="true">
+              <div class="login-connection-node commsfinder-node">
+                <img src="../icons/icon48.png" alt="">
+              </div>
+              <div class="login-connection-line">
+                <span class="connection-segment left"></span>
+                <span class="connection-break"></span>
+                <span class="connection-segment right"></span>
+              </div>
+              <div class="login-connection-node platform-node">
+                <img src="../logos/fa.webp" alt="" id="loginRequiredPlatformIcon">
+              </div>
+            </div>
+            <h2 id="loginRequiredTitle">Login Needed</h2>
+          </div>
+          <div class="disclaimer-body">
+            <p class="disclaimer-text" id="loginRequiredDescription">Commsfinder paused because this platform needs you to log in first.</p>
+            <p class="disclaimer-text login-required-detail" id="loginRequiredDetail">After logging in, return here and resume the scan.</p>
+          </div>
+          <div class="disclaimer-actions">
+            <button class="disclaimer-btn secondary" id="openLoginTabBtn" type="button">Open Platform</button>
+            <button class="disclaimer-btn primary" id="resumeLoginScanBtn" type="button">Resume Scan</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Settings Modal -->
-    <div class="modal" id="settingsModal" style="display: none;">
+    <div class="modal" id="settingsModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle" tabindex="-1">
       <div class="modal-content">
         <div class="modal-header">
-          <h3>Settings</h3>
-          <button class="modal-close" id="modalClose">&times;</button>
+          <h3 id="settingsModalTitle">Settings</h3>
+          <button class="modal-close" id="modalClose" type="button" aria-label="Close settings">&times;</button>
         </div>
         <div class="modal-body">
           <div class="setting-group">
             <label class="setting-label">
-              <input type="checkbox" id="aiEnabled">
+              <input type="checkbox" id="aiEnabled" class="switch-input">
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
               Enable AI Analysis
             </label>
             <p class="setting-description">
@@ -355,7 +448,7 @@
           </div>
           
           <div class="setting-group" id="modelSelectionGroup" style="display: none;">
-            <label class="setting-label">Model Quantization</label>
+            <label class="setting-label" for="modelSelector">Model Quantization</label>
             <select id="modelSelector" class="model-select">
               <option value="quantized">Quantized INT8 (67.5 MB) - Recommended</option>
               <option value="q4f16">Q4F16 (73 MB) - 4-bit weights, good quality</option>
@@ -370,7 +463,7 @@
           </div>
           
           <div class="setting-group">
-            <label class="setting-label">Model Temperature</label>
+            <label class="setting-label" for="modelTemperature">Model Temperature</label>
             <input type="range" id="modelTemperature" min="0.5" max="3.0" step="0.1" value="1.0">
             <span id="temperatureValue">1.0</span>
             <p class="setting-description">Higher values reduce confidence scores (try 1.5-3.0 for more realistic confidence)</p>
@@ -400,7 +493,10 @@
           
           <div class="setting-group">
             <label class="setting-label">
-              <input type="checkbox" id="zenMode">
+              <input type="checkbox" id="zenMode" class="switch-input">
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
               Zen Mode
             </label>
             <p class="setting-description">Removes all distractions.</p>
@@ -408,7 +504,10 @@
           
           <div class="setting-group">
             <label class="setting-label">
-              <input type="checkbox" id="demoMode">
+              <input type="checkbox" id="demoMode" class="switch-input">
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
               Demo Mode
             </label>
             <p class="setting-description">Hides artist names, blurs profile pictures, and replaces text content with Lorem Ipsum to protect privacy during demonstrations.</p>
@@ -416,7 +515,10 @@
           
           <div class="setting-group">
             <label class="setting-label">
-              <input type="checkbox" id="debugMode">
+              <input type="checkbox" id="debugMode" class="switch-input">
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
               Enable Debug Mode
             </label>
             <p class="setting-description">Show detailed logging information in the browser console for debugging purposes.</p>

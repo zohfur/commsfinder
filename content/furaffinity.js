@@ -938,7 +938,7 @@ async function scanFurAffinity(existingProgress = null) {
         console.warn('User not logged in to FurAffinity');
         updateProgressOverlay('error', { error: 'Not logged in to FurAffinity' });
         chrome.runtime.sendMessage({
-            type: 'SCAN_ERROR',
+            type: 'LOGIN_REQUIRED',
             platform: 'furaffinity',
             error: 'Not logged in to FurAffinity'
         });
