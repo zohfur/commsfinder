@@ -6,47 +6,77 @@
 }
 
 :root {
-  --color-bg-canvas: #1a1a1a;
-  --color-bg-surface: #1f2937;
-  --color-bg-surface-2: #2a2a2a;
-  --color-bg-subtle: rgba(255, 255, 255, 0.05);
-  --color-bg-hover: rgba(255, 255, 255, 0.08);
-  --color-border: #374151;
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-text-primary: #e5e7eb;
-  --color-text-secondary: #9ca3af;
-  --color-text-muted: #6b7280;
-  --color-primary: #6366f1;
-  --color-primary-dark: #4338ca;
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-danger: #ef4444;
-  --surface-overlay: var(--color-bg-surface);
-  --surface-overlay-deep: #111827;
-  --surface-card-muted: rgba(31, 41, 55, 0.62);
-  --surface-card-muted-strong: rgba(17, 24, 39, 0.86);
-  --border-card-muted: rgba(55, 65, 81, 0.82);
-  --border-card-strong: rgba(75, 85, 99, 0.72);
-  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --shadow-modal: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
-  --shadow-card-lift: 0 12px 24px rgba(0, 0, 0, 0.28);
-  --connection-line: linear-gradient(90deg, rgba(99, 102, 241, 0.9), rgba(245, 158, 11, 0.82));
-  --connection-glow: 0 0 12px rgba(245, 158, 11, 0.28);
-  --connection-break: rgba(245, 158, 11, 0.9);
-  --connection-break-mark: #fcd34d;
+  /* Console design tokens — canonical system */
+  --console-bg: oklch(18% 0.018 270);
+  --console-panel: oklch(24% 0.024 265);
+  --console-panel-raised: oklch(29% 0.028 265);
+  --console-border: oklch(45% 0.035 265 / 0.55);
+  --console-border-strong: oklch(63% 0.105 276 / 0.7);
+  --console-text: oklch(91% 0.018 265);
+  --console-muted: oklch(70% 0.028 265);
+  --console-faint: oklch(58% 0.03 265);
+  --console-accent: oklch(65% 0.18 276);
+  --console-accent-deep: oklch(49% 0.17 276);
+  --console-success: oklch(70% 0.16 158);
+  --console-warning: oklch(75% 0.15 72);
+  --console-danger: oklch(65% 0.2 27);
+
+  /* Semantic color aliases — keep components using either naming scheme working */
+  --color-bg-canvas: var(--console-bg);
+  --color-bg-surface: var(--console-panel);
+  --color-bg-surface-2: var(--console-panel-raised);
+  --color-bg-subtle: oklch(100% 0 0 / 0.05);
+  --color-bg-hover: oklch(100% 0 0 / 0.08);
+  --color-border: var(--console-border);
+  --color-border-subtle: oklch(100% 0 0 / 0.08);
+  --color-text-primary: var(--console-text);
+  --color-text-secondary: var(--console-muted);
+  --color-text-muted: var(--console-faint);
+  --color-primary: var(--console-accent);
+  --color-primary-dark: var(--console-accent-deep);
+  --color-success: var(--console-success);
+  --color-warning: var(--console-warning);
+  --color-danger: var(--console-danger);
+
+  /* Surface tokens */
+  --surface-overlay: var(--console-panel);
+  --surface-overlay-deep: oklch(18% 0.02 276);
+  --surface-card-muted: oklch(24% 0.025 276 / 0.76);
+  --surface-card-muted-strong: oklch(18% 0.02 276 / 0.92);
+  --border-card-muted: var(--console-border);
+  --border-card-strong: var(--console-border-strong);
+
+  /* Connection animation tokens */
+  --connection-line: linear-gradient(90deg, oklch(65% 0.18 276 / 0.9), oklch(75% 0.15 72 / 0.82));
+  --connection-glow: 0 0 12px oklch(75% 0.15 72 / 0.28);
+  --connection-break: oklch(75% 0.15 72 / 0.9);
+  --connection-break-mark: oklch(84% 0.13 82);
+
+  /* Scan flow / signal tokens */
   --scan-flow-icon-size: 44px;
   --scan-flow-icon-radius: 12px;
   --scan-flow-bar-width: 7px;
+  --scan-signal-primary: var(--console-accent);
+  --scan-signal-secondary: oklch(68% 0.17 294);
+  --scan-signal-warning: var(--console-warning);
+
+  /* Touch targets */
   --touch-target: 44px;
-  --scan-signal-primary: var(--color-primary);
-  --scan-signal-secondary: #8b5cf6;
-  --scan-signal-warning: var(--color-warning);
+
+  /* Border radius */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
+
+  /* Motion */
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --duration-fast: 0.2s;
   --duration-normal: 0.3s;
+
+  /* Shadows */
+  --shadow-modal: 0 25px 50px -12px oklch(0% 0 0 / 0.8);
+  --shadow-card-lift: 0 12px 24px oklch(0% 0 0 / 0.28);
 }
 
 body {
@@ -90,7 +120,7 @@ body {
   flex: 1;
   font-size: 18px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--console-text);
 }
 
 .settings-btn {
@@ -104,7 +134,7 @@ body {
   justify-content: center;
   cursor: pointer;
   transition: background-color var(--duration-fast) ease, transform var(--duration-fast) ease;
-  color: #ffffff;
+  color: var(--console-text);
 }
 
 .settings-btn:hover {
@@ -140,7 +170,7 @@ body {
 .section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #d1d5db;
+  color: var(--console-muted);
   margin-bottom: 12px;
 }
 
@@ -187,7 +217,7 @@ body {
 
 .status-text {
   font-weight: 500;
-  color: #ffffff;
+  color: var(--console-text);
 }
 
 .last-scan {
@@ -268,7 +298,7 @@ body {
 .platform-name {
   flex: 1;
   font-weight: 500;
-  color: #ffffff;
+  color: var(--console-text);
 }
 
 /* Platform states */
@@ -371,7 +401,7 @@ body {
 .progress-text {
   text-align: center;
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--console-muted);
 }
 
 .progress-error-count {
@@ -394,7 +424,7 @@ body {
 .results-title {
   font-size: 16px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--console-text);
 }
 
 .results-count {
@@ -780,7 +810,7 @@ body {
 
 .confidence-component-title {
     font-weight: 600;
-    color: #fff;
+    color: var(--console-text);
 }
 
 .confidence-component-score {
@@ -1158,7 +1188,7 @@ body {
 }
 
 .modal-header h3 {
-  color: #ffffff;
+  color: var(--console-text);
   font-size: 16px;
   font-weight: 600;
 }
@@ -1166,7 +1196,7 @@ body {
 .modal-close {
   background: none;
   border: none;
-  color: #9ca3af;
+  color: var(--console-muted);
   font-size: 24px;
   cursor: pointer;
   padding: 0;
@@ -1193,7 +1223,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #ffffff;
+  color: var(--console-text);
   font-weight: 500;
   margin-bottom: 8px;
   cursor: pointer;
@@ -1212,7 +1242,7 @@ body {
 
 .setting-description {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--console-muted);
   margin-top: 4px;
 }
 
@@ -1296,7 +1326,7 @@ body {
 }
 
 .loading-text {
-  color: #9ca3af;
+  color: var(--console-muted);
   font-size: 14px;
 }
 
@@ -2508,7 +2538,7 @@ body {
 }
 
 .disclaimer-header h2 {
-  color: #f9fafb;
+  color: var(--console-text);
   font-size: 24px;
   font-weight: 600;
   margin: 0;
@@ -2520,7 +2550,7 @@ body {
 }
 
 .disclaimer-text {
-  color: #d1d5db;
+  color: var(--console-muted);
   font-size: 16px;
   line-height: 1.6;
   margin: 0 0 16px 0;
@@ -2632,32 +2662,7 @@ body {
   }
 }
 
-/* Bolder product refresh: local scan console */
-:root {
-  --console-bg: oklch(18% 0.018 270);
-  --console-panel: oklch(24% 0.024 265);
-  --console-panel-raised: oklch(29% 0.028 265);
-  --console-border: oklch(45% 0.035 265 / 0.55);
-  --console-border-strong: oklch(63% 0.105 276 / 0.7);
-  --console-text: oklch(91% 0.018 265);
-  --console-muted: oklch(70% 0.028 265);
-  --console-faint: oklch(58% 0.03 265);
-  --console-accent: oklch(65% 0.18 276);
-  --console-accent-deep: oklch(49% 0.17 276);
-  --console-success: oklch(70% 0.16 158);
-  --console-warning: oklch(75% 0.15 72);
-  --console-danger: oklch(65% 0.2 27);
-  --surface-overlay: var(--console-panel);
-  --surface-overlay-deep: oklch(18% 0.02 276);
-  --surface-card-muted: oklch(24% 0.025 276 / 0.76);
-  --surface-card-muted-strong: oklch(18% 0.02 276 / 0.92);
-  --border-card-muted: var(--console-border);
-  --border-card-strong: var(--console-border-strong);
-  --connection-break-mark: oklch(84% 0.13 82);
-  --scan-signal-primary: var(--console-accent);
-  --scan-signal-secondary: oklch(68% 0.17 294);
-  --scan-signal-warning: var(--console-warning);
-}
+/* Console theme — all tokens are now defined in :root at the top of this file */
 
 body {
   color: var(--console-text);
