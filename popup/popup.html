@@ -142,10 +142,14 @@
         
         <div class="results-filter search-filter-row">
           <label class="sr-only" for="searchFilter">Search results</label>
-          <input type="text" id="searchFilter" class="search-input search-filter-input" placeholder="Search by artist name, username, bio...">
-          <button id="clearSearchBtn" class="clear-search-btn" type="button" title="Clear search" aria-label="Clear search">×</button>
+          <div class="search-chip-input" id="searchChipInput">
+            <div class="search-chips" id="searchChips"></div>
+            <input type="text" id="searchFilter" class="search-input search-filter-input" placeholder="Tags: goo -hypnosis ~werewolf, wildcards goo*, filters score:>30, order:score">
+            <button id="clearSearchBtn" class="clear-search-btn" type="button" title="Clear search" aria-label="Clear search">×</button>
+          </div>
+          <div class="tag-autocomplete" id="searchAutocomplete" style="display: none;"></div>
         </div>
-        
+
         <div class="results-filter toggle-filter-row">
           <label class="toggle-label">
             <input type="checkbox" id="showBlacklisted" class="switch-input">
@@ -153,6 +157,13 @@
               <span class="switch-thumb"></span>
             </span>
             <span>Show Blacklisted Artists</span>
+          </label>
+          <label class="toggle-label">
+            <input type="checkbox" id="showGeneralTags" class="switch-input">
+            <span class="switch-track" aria-hidden="true">
+              <span class="switch-thumb"></span>
+            </span>
+            <span>Show General Tags</span>
           </label>
         </div>
 
@@ -442,8 +453,8 @@
               Enable AI Analysis
             </label>
             <p class="setting-description">
-              <strong>AI Mode (ON):</strong> Uses a fine-tuned DistilBERT model for intelligent commission detection with nuanced understanding.<br>
-              <strong>No-AI Mode (OFF):</strong> Uses regex pattern matching to detect specific phrases like "commissions open", "comms closed", etc. Faster but less accurate.
+              <strong>Discriminative Mode (ON):</strong> Uses a fine-tuned DistilBERT model for intelligent commission detection with nuanced understanding.<br>
+              <strong>Regex Mode (OFF):</strong> Uses regex pattern matching to detect specific phrases like "commissions open", "comms closed", etc. Faster but less accurate.
             </p>
           </div>
           

@@ -20,6 +20,7 @@
     "*://*.furaffinity.net/*",
     "*://*.twitter.com/*",
     "*://*.x.com/*",
+    "*://*.e621.net/*",
     "*://*.bsky.app/*",
     "*://*.huggingface.co/*",
     "*://*.xethub.hf.co/*"
@@ -56,6 +57,7 @@
         "content/*",
         "logos/*",
         "popup/*",
+        "e621-embeddings/*",
         "dist/utils/*"
       ],
       "matches": [

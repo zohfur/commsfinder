@@ -46,6 +46,18 @@ describe('tag classifier', () => {
     expect(tagNames(result)).toEqual(expect.arrayContaining(['goo', 'hypnosis']));
   });
 
+  test('aliases e621 disambiguation tags to their canonical tag', () => {
+    const result = classifyProfileTags({
+      galleryItems: [
+        {
+          tags: 'goo_(disambiguation)',
+        },
+      ],
+    });
+
+    expect(tagNames(result)).toContain('goo');
+  });
+
   test('excludes common words and irrelevant e621 categories', () => {
     const result = classifyProfileTags({
       username: 'wolfwalkers',

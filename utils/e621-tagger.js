@@ -2,6 +2,28 @@ const E621_API_BASE_URL = 'https://e621.net';
 const E621_POSTS_PER_PAGE = 320;
 const E621_MAX_POST_PAGES = 10;
 const E621_RELEVANT_TAG_LIMIT = 80;
+const E621_TAG_ALIASES = {
+  goo_disambiguation: 'goo',
+  hypno: 'hypnosis',
+};
+const E621_LOW_SIGNAL_TAG_EXCLUSIONS = new Set([
+  'ambiguous_gender',
+  'beak',
+  'bottomwear',
+  'braided_hair',
+  'braided_ponytail',
+  'brown_clothing',
+  'claws',
+  'clothing',
+  'crush',
+  'gloves',
+  'hair',
+  'handwear',
+  'mammal',
+  'multi_leg',
+  'multi_limb',
+  'simple_background',
+]);
 const E621_TAG_CATEGORIES = {
   general: 0,
   artist: 1,
@@ -22,11 +44,23 @@ const E621_BACKOFF_STEP_MS = 2000;
 const E621_RECOVERY_STEP_MS = 250;
 const E621_RECOVERY_SUCCESSES = 8;
 const E621_MAX_RETRIES = 4;
+const E621_ARTIST_HANDLE_SUFFIXES = [
+  'art',
+  'arts',
+  'artist',
+  'draw',
+  'draws',
+  'drawing',
+  'illustration',
+  'illustrations',
+  'studio',
+];
 
 let currentE621RateLimitMs = E621_MIN_RATE_LIMIT_MS;
 let e621ConsecutiveSuccesses = 0;
 let nextE621RequestAt = 0;
 const e621ArtistTagCache = new Map();
+let localE621ArtistTagsPromise = null;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -55,13 +89,28 @@ async function waitForE621RateLimit() {
 }
 
 function normalizeE621TagName(value) {
-  return String(value || '')
+  const normalized = String(value || '')
     .toLowerCase()
     .replace(/^@+/, '')
     .replace(/&/g, ' and ')
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '');
+  return E621_TAG_ALIASES[normalized] || normalized;
+}
+
+function normalizeE621ArtistSearchName(profileOrUsername, platform = null) {
+  const username = typeof profileOrUsername === 'object'
+    ? profileOrUsername?.username
+    : profileOrUsername;
+  const profilePlatform = platform || (typeof profileOrUsername === 'object' ? profileOrUsername?.platform : null);
+  let searchName = String(username || '').trim().replace(/^@+/, '');
+
+  if (profilePlatform === 'bluesky' && searchName.includes('.')) {
+    searchName = searchName.split('.')[0];
+  }
+
+  return normalizeE621TagName(searchName);
 }
 
 function compactName(value) {
@@ -128,21 +177,104 @@ function isLikelyArtistTagMatch(profileUsername, candidateName) {
   return calculateNameSimilarity(profileName, candidate) >= 0.82;
 }
 
+function getArtistHandleSuffixScore(profileUsername, candidateName) {
+  const profileName = compactName(profileUsername);
+  const candidate = compactName(candidateName);
+  if (!profileName || !candidate || Math.min(profileName.length, candidate.length) < 5) return 0;
+
+  for (const suffix of E621_ARTIST_HANDLE_SUFFIXES) {
+    if (profileName === `${candidate}${suffix}` || candidate === `${profileName}${suffix}`) {
+      return 0.96;
+    }
+  }
+
+  return 0;
+}
+
+function scoreLocalArtistTagMatch(profileUsername, candidateName) {
+  return Math.max(
+    calculateNameSimilarity(profileUsername, candidateName),
+    getArtistHandleSuffixScore(profileUsername, candidateName)
+  );
+}
+
 function selectBestArtistTag(profileUsername, candidates = []) {
   const normalizedUsername = normalizeE621TagName(profileUsername);
   const scoredCandidates = candidates
     .filter(candidate => candidate?.name && candidate.category === E621_TAG_CATEGORIES.artist)
     .map(candidate => ({
       ...candidate,
-      matchScore: calculateNameSimilarity(normalizedUsername, candidate.name),
+      matchScore: scoreLocalArtistTagMatch(normalizedUsername, candidate.name),
     }))
-    .filter(candidate => isLikelyArtistTagMatch(normalizedUsername, candidate.name))
+    .filter(candidate => candidate.matchScore >= 0.82)
     .sort((a, b) => {
       if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
       return (b.post_count || 0) - (a.post_count || 0);
     });
 
   return scoredCandidates[0] || null;
+}
+
+async function loadLocalE621ArtistTags(options = {}) {
+  if (Array.isArray(options.artistTags)) {
+    return options.artistTags.map(normalizeE621TagName).filter(Boolean);
+  }
+  if (localE621ArtistTagsPromise) return localE621ArtistTagsPromise;
+
+  localE621ArtistTagsPromise = (async () => {
+    const fetchImpl = options.fetchImpl || globalThis.fetch;
+    const getURL = globalThis.chrome?.runtime?.getURL;
+    if (!fetchImpl || !getURL) return [];
+
+    const response = await fetchImpl(getURL('e621-embeddings/tags-by-category.json'), {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to load local e621 artist tags (${response.status})`);
+    }
+
+    const tagsByCategory = await response.json();
+    return (Array.isArray(tagsByCategory?.artist) ? tagsByCategory.artist : [])
+      .map(normalizeE621TagName)
+      .filter(Boolean);
+  })().catch(error => {
+    console.warn('[e621] Failed to load local artist tag export:', error);
+    return [];
+  });
+
+  return localE621ArtistTagsPromise;
+}
+
+function findLocalE621ArtistTag(profileOrUsername, artistTags = [], platform = null) {
+  const normalizedUsername = normalizeE621ArtistSearchName(profileOrUsername, platform);
+  if (normalizedUsername.length < 3 || artistTags.length === 0) return null;
+
+  const tagSet = new Set(artistTags);
+  if (tagSet.has(normalizedUsername)) {
+    return {
+      name: normalizedUsername,
+      category: E621_TAG_CATEGORIES.artist,
+      post_count: 0,
+      source: 'local-export',
+      matchScore: 1,
+    };
+  }
+
+  const profileCompact = compactName(normalizedUsername);
+  const candidates = artistTags
+    .filter(tag => {
+      const tagCompact = compactName(tag);
+      if (Math.min(profileCompact.length, tagCompact.length) < 5) return false;
+      return profileCompact.includes(tagCompact) || tagCompact.includes(profileCompact);
+    })
+    .map(tag => ({
+      name: tag,
+      category: E621_TAG_CATEGORIES.artist,
+      post_count: 0,
+      source: 'local-export',
+    }));
+
+  return selectBestArtistTag(normalizedUsername, candidates);
 }
 
 function buildE621Url(path, params = {}) {
@@ -202,9 +334,15 @@ async function fetchE621Json(path, params, options = {}) {
   }
 }
 
-async function searchE621ArtistTag(profileUsername, options = {}) {
-  const normalizedUsername = normalizeE621TagName(profileUsername);
+async function searchE621ArtistTag(profileOrUsername, options = {}) {
+  const normalizedUsername = normalizeE621ArtistSearchName(profileOrUsername, options.platform);
   if (normalizedUsername.length < 3) return null;
+
+  const localArtistTags = await loadLocalE621ArtistTags(options);
+  const localArtistTag = findLocalE621ArtistTag(profileOrUsername, localArtistTags, options.platform);
+  if (localArtistTag) {
+    return localArtistTag;
+  }
 
   const searches = [
     normalizedUsername,
@@ -261,6 +399,7 @@ function collectRelevantE621Tags(posts = []) {
       for (const tag of postTags[field] || []) {
         const normalizedTag = normalizeE621TagName(tag);
         if (!normalizedTag) continue;
+        if (E621_LOW_SIGNAL_TAG_EXCLUSIONS.has(normalizedTag)) continue;
         const existing = counts.get(normalizedTag) || {
           tag: normalizedTag,
           category: field === 'species' ? 'species' : 'general',
@@ -321,15 +460,14 @@ function buildE621TagClassification(artistTag, posts = []) {
 }
 
 async function classifyProfileTagsFromE621(profile, options = {}) {
-  const profileUsername = profile?.username;
-  const normalizedUsername = normalizeE621TagName(profileUsername);
+  const normalizedUsername = normalizeE621ArtistSearchName(profile);
   if (!normalizedUsername) return null;
   if (e621ArtistTagCache.has(normalizedUsername)) {
     return e621ArtistTagCache.get(normalizedUsername);
   }
 
   try {
-    const artistTag = await searchE621ArtistTag(profileUsername, options);
+    const artistTag = await searchE621ArtistTag(profile, options);
     if (!artistTag) {
       e621ArtistTagCache.set(normalizedUsername, null);
       return null;
@@ -350,7 +488,11 @@ export {
   buildE621TagClassification,
   calculateNameSimilarity,
   collectRelevantE621Tags,
+  findLocalE621ArtistTag,
   isLikelyArtistTagMatch,
+  normalizeE621ArtistSearchName,
   normalizeE621TagName,
+  scoreLocalArtistTagMatch,
+  searchE621ArtistTag,
   selectBestArtistTag,
 };

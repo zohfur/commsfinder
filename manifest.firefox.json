@@ -56,6 +56,7 @@
         "content/*",
         "logos/*",
         "popup/*",
+        "e621-embeddings/*",
         "dist/utils/*"
       ],
       "matches": [

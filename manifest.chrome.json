@@ -50,6 +50,7 @@
         "content/*",
         "logos/*",
         "popup/*",
+        "e621-embeddings/*",
         "onnxruntime-web/*"
       ],
       "matches": [
