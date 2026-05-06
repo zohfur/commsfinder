@@ -17,3 +17,7 @@ demo.css
 demo.js
 .vscode
 *.zip
+.*/
+DESIGN.md
+PRODUCT.md
+skills-lock.json

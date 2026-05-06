@@ -88,11 +88,11 @@ Each component is classified and the final score is calculated by weighing all t
 
 *Rough roadmap, very subject to change*
 
-### v1.1 - Polish Update
+### v1.1.0 - Current Release
 
-- Improve UI and scan experience
-- Bugfixing
-- Implement user requests and feedback
+- Popup UI and scan experience polish pass
+- Accessibility and interaction improvements (touch targets, structure, status messaging)
+- Styling consistency updates and animation cleanup
 
 ### v1.2 - Quality of Life
 
