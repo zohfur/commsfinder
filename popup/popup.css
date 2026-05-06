@@ -750,16 +750,6 @@ body {
     color: #fca5a5;
 }
 
-/* Legacy support for any remaining artist-item classes */
-.artist-item.favorited {
-    background: rgba(255, 255, 200, 0.1);
-    box-shadow: 0 0 10px rgba(255, 255, 0, 0.1);
-}
-
-.artist-item.blacklisted {
-    background: rgba(255, 200, 200, 0.1);
-    box-shadow: 0 0 10px rgba(255, 0, 0, 0.1);
-}
 
 .confidence-score {
     position: relative;
@@ -767,26 +757,24 @@ body {
 }
 
 .confidence-details {
-    display: none;
+    visibility: hidden;
     background: rgba(20, 20, 20, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 4px;
-    /* margin: 8px 0;
-    padding: 12px; */
     font-size: 13px;
-    /* width: calc(100% - 24px); */
     width: 100%;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-    transition: opacity 0.2s ease-out;
     opacity: 0;
     max-height: 0;
     overflow: hidden;
+    transition: opacity 0.2s ease-out, max-height 0.25s ease-out, visibility 0s 0.25s;
 }
 
 .result-item.expanded .confidence-details {
-    display: inline;
+    visibility: visible;
     opacity: 1;
-    max-height: 500px; /* Adjust based on your content */
+    max-height: 500px;
+    transition: opacity 0.2s ease-out, max-height 0.25s ease-out, visibility 0s;
 }
 
 .confidence-component {
@@ -975,21 +963,25 @@ body {
     /* margin-left: 64px; Aligns with content after avatar */
 }
 
-/* Add expand/collapse arrow */
+/* Expand/collapse chevron drawn in CSS — no data URI needed */
 .confidence-score::after {
-    content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' class='svg-icon' style='width: 12px; height: 12px;vertical-align: middle;fill:%23ffffff;overflow: hidden;' viewBox='0 0 1024 1024' version='1.1'%3E%3Cpath d='M360.08448 352.17408h276.48v40.96h-276.48zM360.08448 458.61376h276.48v40.96h-276.48zM360.08448 567.00416h122.88v40.96h-122.88z' fill=''/%3E%3Cpath d='M472.90368 747.52H293.52448V276.48h409.6v223.09376a20.48 20.48 0 0 0 40.96 0V276.48c0-22.58432-18.37568-40.96-40.96-40.96h-409.6c-22.58432 0-40.96 18.37568-40.96 40.96v471.04c0 22.58432 18.37568 40.96 40.96 40.96h179.3792a20.48 20.48 0 0 0 0-40.96z' fill=''/%3E%3Cpath d='M765.57312 745.984l-54.7328-55.76192a106.73664 106.73664 0 0 0 16.78336-57.43616c0-59.28448-48.2304-107.52-107.52-107.52s-107.52 48.23552-107.52 107.52 48.2304 107.52 107.52 107.52c23.36256 0 44.94336-7.57248 62.59712-20.2752l53.632 54.64576a20.4288 20.4288 0 0 0 14.6176 6.13376 20.48 20.48 0 0 0 14.62272-34.82624z m-145.46944-46.63808c-36.70016 0-66.56-29.85984-66.56-66.56s29.85984-66.56 66.56-66.56 66.56 29.85984 66.56 66.56-29.85472 66.56-66.56 66.56z' fill=''/%3E%3C/svg%3E");
-    margin-left: 4px;
+    content: "";
     display: inline-block;
-    width: 24px;
-    height: 24px;
-    scale: 120%;
-    margin-right: -5px;
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+    opacity: 0.7;
+    margin-left: 5px;
+    margin-bottom: 1px;
     vertical-align: middle;
-    transition: transform 0.3s ease;
+    transition: transform 0.2s ease-out, opacity 0.2s ease-out;
 }
 
 .result-item.expanded .confidence-score::after {
-    transform: rotate(180deg);
+    transform: rotate(-135deg);
+    opacity: 1;
 }
 
 /* Empty state */
