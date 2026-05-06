@@ -983,7 +983,7 @@ async function scanBluesky(existingProgress = null) {
         updateProgressOverlay('error', { error: 'Not logged in to Bluesky or unable to access profile' });
         if (isExtensionContextValid()) {
             chrome.runtime.sendMessage({
-                type: 'SCAN_ERROR',
+                type: 'LOGIN_REQUIRED',
                 platform: 'bluesky',
                 error: 'Not logged in to Bluesky or unable to access profile'
             }).catch(error => {

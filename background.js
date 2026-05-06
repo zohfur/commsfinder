@@ -392,6 +392,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    if (request.type === 'CANCEL_SCAN') {
+        handleCancelScan(sendResponse);
+        return true;
+    }
+
     if (request.type === 'GET_MODEL_STATUS') {
         const quantizationType = request.modelName || getCurrentQuantization();
         isModelCached(quantizationType).then(isCached => {
@@ -487,6 +492,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       handleScanError(request.platform, request.error);
       // No response needed for fire-and-forget messages
       return false;
+    }
+
+    if (request.type === 'LOGIN_REQUIRED') {
+      handleLoginRequired(request.platform, request.error, sender);
+      // No response needed for fire-and-forget messages
+      return false;
+    }
+
+    if (request.type === 'OPEN_LOGIN_TAB') {
+      handleOpenLoginTab(sendResponse);
+      return true;
     }
 
     if (request.type === 'UPDATE_TEMPERATURE') {
@@ -1004,6 +1020,9 @@ async function initializeScan(platforms, options = {}) {
       });
     }
 
+    // Clear a previous auth pause once the user intentionally resumes.
+    await chrome.storage.local.remove(['loginRequiredPause']);
+
     // Mark scans as actively in progress
     await chrome.storage.local.set({ 
       activeScansInProgress: true,
@@ -1106,6 +1125,7 @@ async function initializeScan(platforms, options = {}) {
       activeScansInProgress: false,
       scanInProgress: false
     });
+    await chrome.storage.local.remove(['loginRequiredPause']);
     await finishBenchmarkRun('failed', [], errorMessage).catch(() => {});
     
     // Create enhanced error with more context
@@ -1161,6 +1181,189 @@ async function scanPlatform(url, platform, existingProgress = {}) {
   } catch (error) {
     console.error(`Failed to scan ${platform}:`, error);
     handleScanError(platform, error.message);
+  }
+}
+
+function getPlatformLoginInfo(platform) {
+  const loginInfo = {
+    furaffinity: {
+      name: 'FurAffinity',
+      url: 'https://www.furaffinity.net/login/'
+    },
+    bluesky: {
+      name: 'Bluesky',
+      url: 'https://bsky.app'
+    },
+    twitter: {
+      name: 'Twitter',
+      url: 'https://twitter.com/login'
+    }
+  };
+
+  return loginInfo[platform] || {
+    name: platform,
+    url: ''
+  };
+}
+
+async function handleLoginRequired(platform, errorMessage, sender) {
+  console.warn(`[Background] Login required for ${platform}:`, errorMessage);
+
+  try {
+    const tabId = activeScanTabs.get(platform) || sender?.tab?.id || null;
+    const loginInfo = getPlatformLoginInfo(platform);
+    const loginRequiredPause = {
+      platform,
+      platformName: loginInfo.name,
+      loginUrl: loginInfo.url,
+      tabId,
+      message: errorMessage || `Log in to ${loginInfo.name} to continue scanning.`,
+      updatedAt: Date.now()
+    };
+
+    const progressData = {};
+    for (const [activePlatform] of activeScanTabs) {
+      const { [`${activePlatform}_progress`]: platformProgress } =
+        await chrome.storage.local.get([`${activePlatform}_progress`]);
+      if (platformProgress) {
+        progressData[activePlatform] = platformProgress;
+      }
+    }
+
+    await flushScanCacheToStorage();
+
+    for (const [activePlatform, activeTabId] of activeScanTabs) {
+      if (activeTabId === tabId) {
+        continue;
+      }
+
+      try {
+        await chrome.tabs.sendMessage(activeTabId, { type: 'STOP_SCAN' });
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.warn(`Failed to send STOP_SCAN to ${activePlatform} tab ${activeTabId}:`, error);
+      }
+
+      try {
+        await chrome.tabs.remove(activeTabId);
+      } catch (error) {
+        console.warn(`Failed to close paused ${activePlatform} tab ${activeTabId}:`, error);
+      }
+    }
+
+    activeScanTabs.clear();
+
+    progressData[platform] = {
+      phase: 'login_required',
+      error: loginRequiredPause.message,
+      percentage: 5
+    };
+
+    await chrome.storage.local.set({
+      loginRequiredPause,
+      platformProgress: progressData,
+      scanInProgress: true,
+      activeScansInProgress: false,
+      [`${platform}_progress`]: progressData[platform]
+    });
+
+    chrome.runtime.sendMessage({
+      type: 'LOGIN_REQUIRED',
+      data: loginRequiredPause
+    }).catch(() => {});
+  } catch (error) {
+    console.error(`[Background] Error pausing scan for ${platform} login:`, error);
+    handleScanError(platform, error.message || errorMessage);
+  }
+}
+
+async function handleOpenLoginTab(sendResponse) {
+  try {
+    const { loginRequiredPause } = await chrome.storage.local.get(['loginRequiredPause']);
+    if (!loginRequiredPause?.loginUrl) {
+      sendResponse({ success: false, error: 'No login-required scan is paused' });
+      return;
+    }
+
+    let tab = null;
+    if (loginRequiredPause.tabId) {
+      try {
+        tab = await chrome.tabs.get(loginRequiredPause.tabId);
+      } catch (error) {
+        console.warn('[Background] Stored login tab is no longer available:', error);
+      }
+    }
+
+    if (tab) {
+      await chrome.tabs.update(tab.id, { active: true });
+      if (tab.windowId) {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      }
+      sendResponse({ success: true });
+      return;
+    }
+
+    const createdTab = await chrome.tabs.create({
+      url: loginRequiredPause.loginUrl,
+      active: true
+    });
+    await chrome.storage.local.set({
+      loginRequiredPause: {
+        ...loginRequiredPause,
+        tabId: createdTab.id
+      }
+    });
+    sendResponse({ success: true });
+  } catch (error) {
+    console.error('[Background] Failed to open login tab:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleCancelScan(sendResponse) {
+  try {
+    console.log('[Background] Cancelling scan...');
+
+    for (const [platform, tabId] of activeScanTabs) {
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: 'STOP_SCAN' });
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.warn(`Failed to send STOP_SCAN to ${platform} tab ${tabId}:`, error);
+      }
+
+      try {
+        await chrome.tabs.remove(tabId);
+      } catch (error) {
+        console.warn(`Failed to close scan tab for ${platform}:`, error);
+      }
+    }
+
+    activeScanTabs.clear();
+    await flushScanCacheToStorage();
+    await teardownScanCache();
+    await chrome.storage.local.set({
+      scanInProgress: false,
+      activeScansInProgress: false,
+      activePlatforms: [],
+      completedPlatforms: [],
+      platformProgress: {},
+      lastPlatformScanned: null
+    });
+    await chrome.storage.local.remove([
+      'loginRequiredPause',
+      'furaffinity_progress',
+      'bluesky_progress',
+      'twitter_progress',
+      'furaffinity_error',
+      'bluesky_error',
+      'twitter_error'
+    ]);
+
+    sendResponse({ success: true });
+  } catch (error) {
+    console.error('[Background] Error cancelling scan:', error);
+    sendResponse({ success: false, error: error.message });
   }
 }
 
@@ -1562,6 +1765,7 @@ async function handleScanComplete(platform, results) {
         completedPlatforms: [],
         activePlatforms: []
       });
+      await chrome.storage.local.remove(['loginRequiredPause']);
       
       console.log('All scans complete');
       await finishBenchmarkRun('completed', finalResults);
@@ -1593,6 +1797,7 @@ async function handleScanComplete(platform, results) {
         lastScanDate: Date.now(),
         completedPlatforms: []
       });
+      await chrome.storage.local.remove(['loginRequiredPause']);
 
       await finishBenchmarkRun('completed', finalResults);
       
@@ -1632,7 +1837,8 @@ async function getStoredResults(sendResponse) {
       'scanResults', 
       'lastScanDate', 
       'scanInProgress',
-      'activeScansInProgress'
+      'activeScansInProgress',
+      'loginRequiredPause'
     ]);
     
     // Double-check if scans are actually running by checking active tabs
@@ -1695,7 +1901,8 @@ async function getStoredResults(sendResponse) {
       results: data.scanResults || [],
       lastScanDate: data.lastScanDate,
       scanInProgress: data.scanInProgress || false,
-      activeScansInProgress: actuallyActiveScanning
+      activeScansInProgress: actuallyActiveScanning,
+      loginRequiredPause: data.loginRequiredPause || null
     });
   } catch (error) {
     console.error('Error getting stored results:', error);
