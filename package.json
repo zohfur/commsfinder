@@ -7,7 +7,7 @@
     "test": "jest",
     "build": "webpack --config webpack.config.js",
     "build:chrome": "webpack --config webpack.chrome.config.js",
-    "build:firefox": "webpack --config webpack.firefox.config.js && web-ext build --source-dir dist --artifacts-dir dist/firefox",
+    "build:firefox": "webpack --config webpack.firefox.config.js && web-ext build --source-dir dist/firefox --artifacts-dir dist/firefox",
     "build:both": "npm run build:chrome && npm run build:firefox",
     "watch": "webpack --watch --config webpack.config.js",
     "watch:chrome": "webpack --watch --config webpack.chrome.config.js",

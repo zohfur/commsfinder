@@ -4,7 +4,7 @@ const ESLintPlugin = require('eslint-webpack-plugin');
 const fs = require('fs');
 
 // Clean dist folder before building
-const distPath = path.resolve(__dirname, 'dist');
+const distPath = path.resolve(__dirname, 'dist/firefox');
 if (fs.existsSync(distPath)) {
   fs.rmSync(distPath, { recursive: true, force: true });
 }
@@ -23,7 +23,7 @@ module.exports = {
   },
   output: {
     filename: '[name].js',
-    path: path.resolve(__dirname, 'dist'),
+    path: path.resolve(__dirname, 'dist/firefox'),
     publicPath: '/', // Changed from /dist/ to / for correct dynamic imports
   },
   optimization: {
