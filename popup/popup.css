@@ -3216,10 +3216,14 @@ body {
 }
 
 .switch-track {
+  --switch-w: 56px;
+  --switch-h: 28px;
+  --switch-thumb: 20px;
+  --switch-pad: 3px;
   position: relative;
   flex: 0 0 auto;
-  width: 52px;
-  height: 28px;
+  width: var(--switch-w);
+  height: var(--switch-h);
   border: 1px solid var(--console-border);
   border-radius: 999px;
   background: oklch(19% 0.022 270);
@@ -3231,21 +3235,26 @@ body {
   content: "OFF";
   position: absolute;
   inset-block: 0;
-  inset-inline-end: 8px;
-  display: grid;
-  place-items: center;
+  inset-inline-end: 0;
+  width: calc(var(--switch-w) - var(--switch-thumb) - var(--switch-pad) * 2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--console-faint);
   font-size: 9px;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-align: center;
+  pointer-events: none;
 }
 
 .switch-thumb {
   position: absolute;
-  inset-block-start: 3px;
-  inset-inline-start: 3px;
-  width: 20px;
-  height: 20px;
+  inset-block-start: var(--switch-pad);
+  inset-inline-start: var(--switch-pad);
+  width: var(--switch-thumb);
+  height: var(--switch-thumb);
   border-radius: 999px;
   background: var(--console-muted);
   box-shadow: 0 2px 6px oklch(8% 0.02 270 / 0.42);
@@ -3260,12 +3269,12 @@ body {
 
 .switch-input:checked + .switch-track::before {
   content: "ON";
-  inset-inline: 8px auto;
+  inset-inline: 0 auto;
   color: oklch(90% 0.055 276);
 }
 
 .switch-input:checked + .switch-track .switch-thumb {
-  transform: translateX(24px);
+  transform: translateX(calc(var(--switch-w) - var(--switch-thumb) - var(--switch-pad) * 2));
   background: var(--console-text);
 }
 

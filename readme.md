@@ -88,7 +88,7 @@ Each component is classified and the final score is calculated by weighing all t
 
 *Rough roadmap, very subject to change*
 
-### v1.1.0 - Current Release
+### v1.1.1 - Current Release
 
 - Popup UI and scan experience polish pass
 - Accessibility and interaction improvements (touch targets, structure, status messaging)
