@@ -5,6 +5,48 @@ import { AIAnalyzer } from './utils/ai-analyzer.js';
 import { classifyProfileTags } from './utils/tag-classifier.js';
 import { classifyProfileTagsFromE621 } from './utils/e621-tagger.js';
 
+// --- URL helpers ---------------------------------------------------------
+// Match a hostname against a registrable domain, allowing subdomains but not
+// look-alikes (e.g. "furaffinity.net.evil.com" or "evilfuraffinity.net").
+function hostMatches(hostname, domain) {
+    return hostname === domain || hostname.endsWith('.' + domain);
+}
+
+// Resolve the scan platform for a tab URL by parsing its hostname.
+// Returns null for unparseable, non-http(s), or unrelated URLs.
+function getPlatformFromUrl(url) {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return null;
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return null;
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (hostMatches(host, 'furaffinity.net')) return 'furaffinity';
+    if (hostMatches(host, 'bsky.app')) return 'bluesky';
+    if (hostMatches(host, 'twitter.com') || hostMatches(host, 'x.com')) return 'twitter';
+    return null;
+}
+
+// True if the URL is one of the scan-source pages we drive during a scan.
+function isScanSourceUrl(url) {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname;
+    if (hostMatches(host, 'furaffinity.net')) return path.startsWith('/controls/');
+    if (hostMatches(host, 'bsky.app')) return path.startsWith('/profile');
+    if (hostMatches(host, 'twitter.com') || hostMatches(host, 'x.com')) return path.startsWith('/following');
+    return false;
+}
+
 // AI Analyzer instance
 let aiAnalyzer = null;
 let analyzerInitialized = false;
@@ -320,22 +362,17 @@ async function initializeActiveScanState() {
       
       for (const tab of tabs) {
         // Check if tab URL matches scan platform URLs
-        if (tab.url?.includes('furaffinity.net/controls/') ||
-            tab.url?.includes('bsky.app/profile') ||
-            tab.url?.includes('twitter.com/following')) {
-          
+        if (isScanSourceUrl(tab.url)) {
+
           // Try to ping the content script to see if it's actively scanning
           try {
             await chrome.tabs.sendMessage(tab.id, { type: 'PING' });
             foundActiveScanTabs = true;
-            
+
             // Determine platform from URL and restore to activeScanTabs
-            if (tab.url.includes('furaffinity.net')) {
-              activeScanTabs.set('furaffinity', tab.id);
-            } else if (tab.url.includes('bsky.app')) {
-              activeScanTabs.set('bluesky', tab.id);
-            } else if (tab.url.includes('twitter.com')) {
-              activeScanTabs.set('twitter', tab.id);
+            const platform = getPlatformFromUrl(tab.url);
+            if (platform) {
+              activeScanTabs.set(platform, tab.id);
             }
           } catch (error) {
             // Content script not responding, tab is not actively scanning
@@ -1853,24 +1890,19 @@ async function getStoredResults(sendResponse) {
         let foundActiveScanTabs = false;
         
         for (const tab of tabs) {
-          if (tab.url?.includes('furaffinity.net/controls/') ||
-              tab.url?.includes('bsky.app/profile') ||
-              tab.url?.includes('twitter.com/following')) {
-            
+          if (isScanSourceUrl(tab.url)) {
+
             // Try to ping the content script to see if it's actively scanning
             try {
               await chrome.tabs.sendMessage(tab.id, { type: 'PING' });
               foundActiveScanTabs = true;
-              
+
               // Restore to activeScanTabs map
-              if (tab.url.includes('furaffinity.net')) {
-                activeScanTabs.set('furaffinity', tab.id);
-              } else if (tab.url.includes('bsky.app')) {
-                activeScanTabs.set('bluesky', tab.id);
-              } else if (tab.url.includes('twitter.com')) {
-                activeScanTabs.set('twitter', tab.id);
+              const platform = getPlatformFromUrl(tab.url);
+              if (platform) {
+                activeScanTabs.set(platform, tab.id);
               }
-              
+
               console.log(`[Background] Restored active scan tab for platform from URL: ${tab.url}`);
             } catch (error) {
               // Content script not responding, tab is not actively scanning

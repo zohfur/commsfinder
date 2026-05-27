@@ -866,9 +866,15 @@ class CommisionsfinderPopup {
   }
 
   escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value || '';
-    return div.innerHTML;
+    // Escape every HTML meta-character explicitly. A textContent->innerHTML
+    // round-trip leaves quotes intact, which allows attribute breakout when the
+    // result is interpolated into a quoted attribute (alt="...", data-tag="...").
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   escapeAttribute(value) {
