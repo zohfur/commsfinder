@@ -32,31 +32,32 @@ jobs:
       - name: Build Chrome & Firefox Extensions
         run: npm run build:both
 
-      - name: Zip Chrome build (exclude firefox output)
+      - name: Rename build zips
+        id: zips
         run: |
-          cd dist
-          zip -r ../commsfinder-chrome-${{ steps.version.outputs.version }}.zip . -x "firefox/*"
-
-      - name: Find Firefox build zip
-        id: ff_zip
-        run: |
-          FILE=$(ls dist/firefox/*.zip | head -n1)
-          if [[ -z "$FILE" ]]; then
-            echo "No Firefox zip found in dist/firefox"
+          CHROME_ZIP="commsfinder-chrome-${{ steps.version.outputs.version }}.zip"
+          FIREFOX_ZIP="commsfinder-firefox-${{ steps.version.outputs.version }}.zip"
+          if [[ ! -f dist/chrome.zip ]]; then
+            echo "Chrome build zip not found at dist/chrome.zip"
             exit 1
           fi
-          FILENAME="commsfinder-firefox-${{ steps.version.outputs.version }}.zip"
-          cp "$FILE" "dist/firefox/$FILENAME"
-          echo "ff_zippath=dist/firefox/$FILENAME" >> $GITHUB_OUTPUT
+          if [[ ! -f dist/firefox.zip ]]; then
+            echo "Firefox build zip not found at dist/firefox.zip"
+            exit 1
+          fi
+          mv dist/chrome.zip "$CHROME_ZIP"
+          mv dist/firefox.zip "$FIREFOX_ZIP"
+          echo "chrome_zip=$CHROME_ZIP" >> $GITHUB_OUTPUT
+          echo "firefox_zip=$FIREFOX_ZIP" >> $GITHUB_OUTPUT
 
       - name: Upload Chrome Artifact
         uses: actions/upload-artifact@v4
         with:
           name: commsfinder-chrome-${{ steps.version.outputs.version }}
-          path: commsfinder-chrome-${{ steps.version.outputs.version }}.zip
+          path: ${{ steps.zips.outputs.chrome_zip }}
 
       - name: Upload Firefox Artifact
         uses: actions/upload-artifact@v4
         with:
           name: commsfinder-firefox-${{ steps.version.outputs.version }}
-          path: ${{ steps.ff_zip.outputs.ff_zippath }}
+          path: ${{ steps.zips.outputs.firefox_zip }}
