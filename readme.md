@@ -1,124 +1,262 @@
+<a id="readme-top"></a>
 
-# 🔍 Commsfinder Extension
+[![License][license-badge]][license]
+[![Open Issues][issues-badge]][issues]
+[![Chrome Web Store Users][chrome-badge]][chrome]
+[![Firefox Add-ons Users][firefox-badge]][firefox]
+[![Manifest V3][mv3-badge]](#)
 
-![Commsfinder](logos/commsfinder_outline.png) **Find artists to commission across multiple platforms**
+***
 
-Commsfinder is a cross-platform browser extension that automatically scans your followed artists on FurAffinity, Bluesky, Twitter/X, and more, to identify artists that are currently open for commissions or paid work. Using AI-powered text analysis and pattern recognition, it saves you time by eliminating the need to manually browse through hundreds (or thousands) of profiles.
+<h1 align="center">
+<sub><img src="logos/commsfinder_outline.png" height="38" width="38"></sub>
+Commsfinder
+</h1>
 
-Commsfinder uses a custom fine-tuned classification model based on DistilBERT that runs entirely in your web browser off pure JavaScript; no programs, APIs, servers, or paid software required. It supports both CPU and GPU inference through Onnxruntime-web (ORT).
+<p align="center"><strong>Find artists with open commissions across multiple platforms, scanned locally in your browser.</strong></p>
 
-## ✨ Features
+<p align="center">
+<a href="#installation">Install</a> &nbsp;·&nbsp;
+<a href="#usage">Usage</a> &nbsp;·&nbsp;
+<a href="https://github.com/zohfur/commsfinder/issues/new?template=bug_report.md">Report a Bug</a> &nbsp;·&nbsp;
+<a href="https://github.com/zohfur/commsfinder/issues/new">Request a Feature</a>
+</p>
 
-- **Multi-Platform Scanning:** Support FurAffinity and Bluesky with more to come.
+[license]: LICENSE
+[issues]: https://github.com/zohfur/commsfinder/issues
+[chrome]: https://chromewebstore.google.com/detail/eieceiemgcadopdfhbggibicepnkmako
+[firefox]: https://addons.mozilla.org/en-US/firefox/addon/commsfinder/
 
-- **AI & No-AI Modes**: Choose between Commsfinder's classification model or simple pattern detection using regex and keywords.
+[license-badge]: https://img.shields.io/badge/license-AGPL--3.0-blue
+[issues-badge]: https://img.shields.io/github/issues/zohfur/commsfinder
+[chrome-badge]: https://img.shields.io/chrome-web-store/users/eieceiemgcadopdfhbggibicepnkmako?label=chrome%20users&logo=googlechrome&logoColor=white
+[firefox-badge]: https://img.shields.io/amo/users/commsfinder?label=firefox%20users&logo=firefoxbrowser&logoColor=white
+[mv3-badge]: https://img.shields.io/badge/manifest-v3-success
 
-- **Sorted by confidence**: Each classification outputs a confidence score which is totalled to a final result per profile; the resulting list is sorted by confidence, showing the most likely available artists at the top.
+---
 
-- **Result caching**: Saves previous scans and partial scan progress to a local cache to avoid unnecessary waiting and page loads.
+<a id="about"></a>
 
-- **Damn good privacy**: No data leaves your device. No telemetry, servers, or spam.
+## /•᷅‎‎•᷄\੭ About
 
-## 📖 How to Use
+you probably: *"what if there was a way to tell which artists on my social media were open for comms??"*
+>ok but what if i was thinking the same thing and then made that thing
 
-### Running a Scan
+Commsfinder is a cross-platform browser extension that scans the artists you already follow on [FurAffinity](https://www.furaffinity.net), [Bluesky](https://bsky.app), and more, then flags which ones are currently **open for commissions**. Instead of manually crawling hundreds (or thousands) of profiles, you run one scan and get a neat sorted list.
 
-1. **Click the Commsfinder icon** in your browser toolbar
-2. **Select platforms** to scan (checkboxes in the popup)
-3. **Click "Scan for Open Commissions"**
-4. **Wait for results** - scanning duration can vary wildly depending on how many artists you follow
+Classification runs on a custom fine-tuned [DistilBERT](https://huggingface.co/docs/transformers/model_doc/distilbert) model that executes **entirely in your browser** using pure JavaScript; no native programs, external APIs, servers, or paid software. Inference runs on CPU or WebGPU through [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/) (ORT) via [Transformers.js](https://github.com/huggingface/transformers.js).
 
-### Viewing Results
+Yes, it uses a large language model; for an actually good reason. This entire project grew to be a hopeful lesson in actual ethical use of LLMs (and... *yucky AI..*) Commsfinder uses **discriminative** AI, the image-and-pattern-recognition kind. No art is being generated or trained on, no data to be harvested and sold. It's a tool that does its job and __that's it.__
 
-- **Artist cards** show the avatar, name, platform, and confidence score
-- **Click any result** to open the artist's profile in a new tab
-- **Filter results** by confidence level or platform
-- **Personalize** your results by blacklisting or favoriting certain accounts
 
-### Understanding Artist Scores
 
-- **🟢 70-100%**: High confidence artist is open
-- **🟡 50-69%**: Some results classified as open
-- **🔴 30-49%**: Likely not accepting commissions
+---
 
-**Why is a certain profile wrongly detected as closed?**
-> If an artist does not specifically mention they are open or closed, we have no way of detecting that aside from asking them directly.
-> In the future, support will be added for the community to manually submit corrections or share openings.
+<a id="features"></a>
 
-## Detection
+## (っ˘ڡ˘ς)   mmm yummy features
 
-Commsfinder tries to pull from as many sources as possible while being mindful of the sites we're utilizing.
+- **Multi-platform scanning**: FurAffinity and Bluesky today, with more on the [roadmap](#roadmap).
+- **AI & No-AI modes**: Choose the fine-tuned classification model, or fall back to lightweight pattern detection using regex and keywords.
+- **Confidence ranking**: Every data point is scored and combined into a per-profile confidence score; results are sorted so the most likely available artists surface first.
+- **Result caching**: Completed scans and partial progress are cached locally to avoid redundant page loads and waiting.
+- **Privacy by design**: No data leaves your device. No telemetry or servers.
+
+---
+
+<a id="supported-platforms"></a>
+
+## ✎ᝰ   Supported Platforms
+
+| Platform | Status | Detection Method |
+| :--- | :--- | :--- |
+| <img src="logos/fa.webp" width="16" align="absmiddle"> [FurAffinity](https://www.furaffinity.net) | ⚠️ Limited | Web scraping |
+| <img src="logos/bsky.svg" width="16" align="absmiddle"> [Bluesky](https://bsky.app) | ✅ Full | [AT Protocol](https://atproto.com) API |
+| <img src="logos/twitter.svg" width="16" align="absmiddle"> [Twitter / X](https://x.com) | 🚫 Unsupported | Undetermined* |
+
+> \* Elon removed all free API access and blocked site access for signed-out users. The only remaining scanning method is logged-in web scraping. This doesn't really work anymore either as they have severely ratelimited users, and have gone to lengths to even ban some automated accounts. If the project reaches enough users, a Patreon / premium tier could fund proper X API support down the road.
+
+---
+
+<a id="installation"></a>
+
+## Installation  (╭ರ_•́)
+
+| Browser | Get it |
+| :--- | :--- |
+| <img src="logos/chrome.svg" width="20" align="absmiddle"> **Chrome** and anything Chromium: Edge, Brave, Opera, etc | [Chrome Web Store](https://chromewebstore.google.com/detail/eieceiemgcadopdfhbggibicepnkmako) |
+| <img src="logos/firefox.svg" width="20" align="absmiddle"> **Firefox** (≥ 121) | [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/commsfinder/) |
+| <img src="logos/safari.svg" width="20" align="absmiddle"> **Safari** | no. |
+
+Or visit [findcom.ms](https://findcom.ms) for direct install links.
+
+### Build from source
+
+**Prerequisites:** [Node.js](https://nodejs.org) ≥ 21 (built with Node 24.4.1 / npm 11.5.1).
+
+```bash
+git clone https://github.com/zohfur/commsfinder.git
+cd commsfinder
+npm install
+npm run build:both        # or build:chrome / build:firefox
+```
+
+Packaged builds land in `dist/chrome/` and `dist/firefox/` (a versioned `.zip` is produced for each).
+
+**Load the unpacked extension:**
+
+- **Chrome / Chromium:** go to `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select `dist/chrome/`.
+- **Firefox:** go to `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on**, and select the manifest inside `dist/firefox/`. You may need to specifically use Firefox Developer Edition; that's what I had to use for testing to get everything to work as expected, especially hot-reloading.
+
+
+---
+
+<a id="usage"></a>
+
+## ₍^. .^₎⟆    Usage
+
+### Running a scan
+
+1. **Click the Commsfinder icon** in your browser toolbar.
+2. **Select platforms** to scan (checkboxes in the popup).
+3. **Click "Scan for Open Commissions."**
+4. **Wait for results**: scan duration varies widely with how many artists you follow.
+
+### Viewing results
+
+- **Artist cards** show avatar, name, platform, and confidence score.
+- **Click any result** to open the artist's profile in a new tab.
+- **Filter** results by confidence level or platform.
+- **Personalize** by favoriting or blacklisting accounts.
+
+### Reading confidence scores
+
+| Score | Meaning |
+| :--- | :--- |
+| 🟢 **70–100%** | High confidence the artist is open |
+| 🟡 **50–69%** | Some signals classified as open |
+| 🔴 **30–49%** | Likely not accepting commissions |
+
+> **Why is a profile showing open/closed when it shouldn't?**  
+If an artist never states whether they're open or closed, there's no signal to detect short of asking them directly.  
+A future release will let the community submit corrections and share openings manually.   Ask your artist friends to put their status in their bios or pinned posts!! (please.)
+
+---
+
+<a id="how-detection-works"></a>
+
+## How Detection Works   ه = ∑∞ⁿ⁼⁰ ¹ₙ
+
+Commsfinder pulls from as many sources as a platform reasonably exposes, and tries to be mindful of ratelimiting and usage restrictions.
 
 ### Example: FurAffinity
 
-We search the user's Favorites and Watchlist pages to find artists.
+Artists are discovered from the user's **Favorites** and **Watchlist** pages. Each artist is then scraped for:
 
-Each artist is scraped for the following data points:
+1. **Profile bio** and description
+2. **Recent gallery items**: names, descriptions, and tags
+3. **Pinned / most recent journal**: weighted by recency
+4. **Profile commission status**: `Commissions: Yes/No`
 
-1. **Profile Bio** and description
-2. **Recent gallery items** (and their names, description, and tags)
-3. **Pinned/most recent journal** (we also weigh this by how recent it is)
-4. **Profile commissions status** (Commissions: Yes/No)
+Each component is classified independently, and the final score is a weighted combination of all available data.
 
-Each component is classified and the final score is calculated by weighing all the available data.
+---
 
-## 🎨 Supported Platforms
+<a id="built-with"></a>
 
-| Platform | Status | Detection Method |
-|----------|--------|------------------|
-| FurAffinity | ⚠️ Limited | Web scraping |
-| Bluesky | ✅ Full | Atproto API |
-| Twitter/X | 🚫 Unsupported | Undetermined* |
+## </>   Built With
 
-> Elon completely nuked all free API usage and blocked site access to users not signed in.
-> This makes the only possible scanning method to be web scraping using an account, which is likely going to be immediately banned.
-> Later down the road, if we reach enough users, I could set up a Patreon / premium subscription to fund Twitter/X support.
+- [DistilBERT](https://huggingface.co/docs/transformers/model_doc/distilbert) ([paper](https://arxiv.org/abs/1910.01108)): base architecture for the classifier
+- [Transformers.js](https://github.com/huggingface/transformers.js) (`@xenova/transformers`): in-browser inference pipeline
+- [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/): CPU & WebGPU inference backend
+- [Webpack](https://webpack.js.org): build tooling
+- [AT Protocol](https://atproto.com): Bluesky data source
 
-## 🔒 Privacy and Security
+---
 
-**No data leaves your browser:** All processing and inference is done locally
+<a id="privacy--security"></a>
 
-**No API keys or developer accounts required:** Uses web scraping and JS service workers instead of paid APIs
+## Privacy & Security (⌐■_■)
 
-**Transparency**: Open source code and publicly available DistilBERT model
+- **No data leaves your browser**: all processing and inference is local.
+- **No API keys or developer accounts**: runs on web scraping and JS service workers.
+- **Transparent**: [open source code](https://github.com/zohfur/commsfinder) and a [public model](https://huggingface.co/zohfur/distilbert-commissions).
+- **No telemetry or tracking**: no user data collected or transmitted.
 
-**No telemetry or tracking**: No user data collected or transmitted
+See the full [Privacy Policy](privacy-policy.md) for details.
 
-## 🗺️ Roadmap
+---
 
-*Rough roadmap, very subject to change*
+<a id="roadmap"></a>
 
-### v1.1.1 - Current Release
+## /ᐠ≽•ヮ•≼マ Roadmap 
+> Rough and very subject to change!!  
+I work on this project randomly when the motivation gloops between all the creases in my wrinkly brain  
 
-- Popup UI and scan experience polish pass
-- Accessibility and interaction improvements (touch targets, structure, status messaging)
-- Styling consistency updates and animation cleanup
+**v1.1.1: Current release**
 
-### v1.2 - Quality of Life
+- Popup UI and scan-experience polish pass
+ - Accessibility and interaction improvements (touch targets, structure, status messaging)
+ - Styling consistency and animation cleanup
 
-- Scan statistics
-- CSV/JSON export support
-- Improve No-AI mode accuracy
+**v1.2: Quality of life**
 
-### v1.3 - Model Update
+ - Scan statistics
+ - CSV / JSON export
+ - Improved "No-AI mode" accuracy
 
-- New revision of classification Model
-- Higher accuracy and faster inference
-- Better WebGPU support
+**v1.3: Model update**
 
-### v1.4 - Community Update
+ - New classification model revision
+ - Higher accuracy and faster inference
+ - Better WebGPU support
 
-- Users can report scan inaccuracies
-- Manually submit artist status
-- Buyer Beware / Artist Beware integration(?)
+**v1.4: Community update**
 
-### v1.5 - Platform Update
+ - Scan inaccuracy reporting
+ - Manual artist status submissions
+ - Buyer Beware / Artist Beware integration (maybe?)
 
-- Add support for e621, ych.commishes, Weasyl, Artistree, Artconomy
-- Re-evaluate Twitter/X support (if we reach enough users)
+**v1.5: Platform update**
 
-### v1.6+ - Tagging and Mobile Development
+ - Add ych.commishes, [Weasyl](https://www.weasyl.com), Artistree, Artconomy, Sofurry
+ - Re-evaluate Twitter / X support
 
-- Tag searching: Search for artists with specific keyword or tag
-- Android app for mobile usage
-- iOS app.. maybe.
+**v1.6+: Tagging & mobile**
+
+ - Tag search: find artists by keyword or tag
+ - Android app
+ - iOS app… maybe.
+
+See [open issues](https://github.com/zohfur/commsfinder/issues) for the full list of proposed features and known bugs.
+
+
+---
+
+<a id="contributing"></a>
+
+##  Contributing ⸜(｡˃ ᵕ ˂ )⸝♡
+
+The code is a nightmare and anything I make is held together by stickers and Elmer's glue. That said, if you want to contribute a feature or bug fix, I would appreciate it! Fork, branch, and open a PR.
+
+Found a bug or have an idea? [Please open an issue!](https://github.com/zohfur/commsfinder/issues)
+
+
+---
+
+<a id="license"></a>
+
+## -ˋˏ✄┈┈┈┈   License
+
+Distributed under the **AGPL-3.0** License. See [`LICENSE`](LICENSE) for details.
+
+
+---
+
+<a id="contact"></a>
+
+## Contact    ˗ˏˋ ꒰ ✉︎ ꒱ ˎˊ˗ 
+
+**Zohfur**: commsfinder@zohfur.dog
+
+Project link: [https://github.com/zohfur/commsfinder](https://github.com/zohfur/commsfinder)

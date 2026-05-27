@@ -1924,13 +1924,13 @@ class CommisionsfinderPopup {
         </button>
       </div>
       <div class="result-actions">
-        <button class="action-btn favorite-btn ${isFavorited ? 'active' : ''}" 
-                title="${isFavorited ? 'Remove from favorites' : 'Add to favorites'}"
+        <button class="action-btn favorite-btn ${isFavorited ? 'active' : ''}"
+                data-tooltip="${isFavorited ? 'Remove from Favorites' : 'Add to Favorites'}"
                 data-artist-id="${artistId}">
           ${isFavorited ? '⭐' : '☆'}
         </button>
-        <button class="action-btn blacklist-btn ${isBlacklisted ? 'active' : ''}" 
-                title="${isBlacklisted ? 'Remove from blacklist' : 'Add to blacklist'}"
+        <button class="action-btn blacklist-btn ${isBlacklisted ? 'active' : ''}"
+                data-tooltip="${isBlacklisted ? 'Remove from Blacklist' : 'Add to Blacklist'}"
                 data-artist-id="${artistId}">
           ⛔
         </button>
@@ -2011,7 +2011,9 @@ class CommisionsfinderPopup {
       e.stopPropagation();
       this.toggleFavorite(artistId);
       favoriteBtn.classList.toggle('active');
-      favoriteBtn.textContent = favoriteBtn.classList.contains('active') ? '⭐' : '☆';
+      const isFav = favoriteBtn.classList.contains('active');
+      favoriteBtn.textContent = isFav ? '⭐' : '☆';
+      favoriteBtn.dataset.tooltip = isFav ? 'Remove from Favorites' : 'Add to Favorites';
       // Toggle the CSS class on the result item
       element.classList.toggle('favorited');
     });
@@ -2020,15 +2022,18 @@ class CommisionsfinderPopup {
       e.stopPropagation();
       this.toggleBlacklist(artistId);
       blacklistBtn.classList.toggle('active');
+      const isBlack = blacklistBtn.classList.contains('active');
+      blacklistBtn.dataset.tooltip = isBlack ? 'Remove from Blacklist' : 'Add to Blacklist';
       // Toggle the CSS class on the result item
       element.classList.toggle('blacklisted');
       // Remove favorited class if blacklisting
-      if (blacklistBtn.classList.contains('active')) {
+      if (isBlack) {
         element.classList.remove('favorited');
         const favBtn = element.querySelector('.favorite-btn');
         if (favBtn) {
           favBtn.classList.remove('active');
           favBtn.textContent = '☆';
+          favBtn.dataset.tooltip = 'Add to Favorites';
         }
       }
     });

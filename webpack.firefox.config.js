@@ -1,6 +1,7 @@
 const path = require('path');
 const CopyPlugin = require('copy-webpack-plugin');
 const ESLintPlugin = require('eslint-webpack-plugin');
+const ExtensionZipPlugin = require('./webpack.extension-zip-plugin');
 const fs = require('fs');
 
 // Clean dist folder before building
@@ -70,6 +71,9 @@ module.exports = {
     new ESLintPlugin({
       files: '**/*.js',
       fix: true,
+    }),
+    new ExtensionZipPlugin({
+      zipPath: path.resolve(__dirname, 'dist/firefox.zip'),
     }),
   ],
   resolve: {
