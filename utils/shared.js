@@ -353,9 +353,11 @@ if (typeof window !== 'undefined') {
 }
 
 // Export for modules
+/* eslint-disable no-undef */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = CommissionfinderUtils;
 }
+/* eslint-enable no-undef */
 
 // Utility functions shared across content scripts
 
@@ -406,6 +408,7 @@ export function sleep(ms) {
  * @param {...any} args - Additional arguments to log
  */
 export function debugLog(message, ...args) {
+  // eslint-disable-next-line no-undef
   if (typeof isDebugMode !== 'undefined' && isDebugMode) {
     console.log(message, ...args);
   }

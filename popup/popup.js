@@ -1,6 +1,5 @@
 /* global Fuse */
 // Popup JavaScript for Commsfinder extension
-console.log('Commsfinder popup loaded');
 
 const E621_TAG_ALIASES = {
   'goo_(disambiguation)': 'goo',
@@ -35,10 +34,15 @@ class CommisionsfinderPopup {
     this.tagAutocompleteCache = new Map();
     this.tagAutocompleteTimer = null;
     this.e621EmbeddingsLoaded = false;
+    this.e621EmbeddingsLoadPromise = null;
     this.e621AliasMap = new Map(Object.entries(E621_TAG_ALIASES));
     this.e621ImplicationMap = new Map();
     this.e621Tags = [];
     this.e621TagExpansionCache = new Map();
+    this.profileThemeCache = new Map();
+    this.lastScanSettings = null;
+    this.pendingScanSettings = null;
+    this.scanProgressByPlatform = {};
     this.promoHiddenForever = false; // Cache for promo hide forever preference
     this.promoHiddenUntil = null; // Cache for promo hide until timestamp
     this.feedbackHiddenForever = false; // Cache for feedback hide forever preference
@@ -89,11 +93,11 @@ class CommisionsfinderPopup {
     // Load settings first
     await this.loadSettings();
     
-    // Then load other data in parallel
+    // Then load popup-critical data in parallel. The larger e621 dictionaries
+    // are loaded lazily when search needs them.
     await Promise.all([
       this.loadResults(),
-      this.loadFavoritesAndBlacklist(),
-      this.loadE621Embeddings()
+      this.loadFavoritesAndBlacklist()
     ]);
 
     this.searchInstance = null;
@@ -114,14 +118,21 @@ class CommisionsfinderPopup {
     this.scanBtn = document.getElementById('scanBtn');
     this.stopBtn = document.getElementById('stopBtn');
     this.scanProgress = document.getElementById('scanProgress');
+    this.progressBar = document.getElementById('progressBar');
     this.progressFill = document.getElementById('progressFill');
     this.progressText = document.getElementById('progressText');
     
     // Status elements
     this.statusIndicator = document.getElementById('statusIndicator');
+    this.scanStatus = document.getElementById('scanStatus');
     this.statusText = document.getElementById('statusText');
     this.lastScan = document.getElementById('lastScan');
     this.statusDot = this.statusIndicator.querySelector('.status-dot');
+    this.scanStatusStats = document.getElementById('scanStatusStats');
+    this.platformProfileCounts = {
+      furaffinity: document.getElementById('furaffinityProfileCount'),
+      bluesky: document.getElementById('blueskyProfileCount')
+    };
     
     // Platform checkboxes
     this.platformFuraffinity = document.getElementById('platformFuraffinity');
@@ -134,6 +145,7 @@ class CommisionsfinderPopup {
     this.resultsCount = document.getElementById('resultsCount');
     this.confidenceFilter = document.getElementById('confidenceFilter');
     this.platformFilter = document.getElementById('platformFilter');
+    this.platformFilterIcons = document.getElementById('platformFilterIcons');
     this.searchFilter = document.getElementById('searchFilter');
     this.searchChipInput = document.getElementById('searchChipInput');
     this.searchChips = document.getElementById('searchChips');
@@ -222,8 +234,12 @@ class CommisionsfinderPopup {
     
     // Filters
     this.confidenceFilter.addEventListener('change', () => this.applyFilters());
-    this.platformFilter.addEventListener('change', () => this.applyFilters());
+    this.platformFilter.addEventListener('change', () => {
+      this.updatePlatformFilterIcon();
+      this.applyFilters();
+    });
     this.searchFilter.addEventListener('input', () => this.handleSearchInput());
+    this.searchFilter.addEventListener('focus', () => this.primeE621EmbeddingsForSearch());
     this.searchFilter.addEventListener('keydown', (e) => this.handleSearchKeydown(e));
     this.searchFilter.addEventListener('blur', () => {
       setTimeout(() => this.hideTagAutocomplete(), 150);
@@ -255,10 +271,20 @@ class CommisionsfinderPopup {
     // Settings controls
     this.aiEnabled.addEventListener('change', () => this.updateSettings());
     this.modelSelector.addEventListener('change', () => this.updateModelSettings());
+    const syncTemperatureTrack = () => {
+      const min = parseFloat(this.modelTemperature.min) || 0;
+      const max = parseFloat(this.modelTemperature.max) || 1;
+      const val = parseFloat(this.modelTemperature.value) || min;
+      const pct = max === min ? 0 : ((val - min) / (max - min)) * 100;
+      this.modelTemperature.style.setProperty('--track-fill', `${pct}%`);
+    };
     this.modelTemperature.addEventListener('input', () => {
       this.temperatureValue.textContent = this.modelTemperature.value;
+      syncTemperatureTrack();
       this.updateTemperature(parseFloat(this.modelTemperature.value));
     });
+    syncTemperatureTrack();
+    this._syncTemperatureTrack = syncTemperatureTrack;
     this.clearAllDataBtn.addEventListener('click', () => this.clearAllData());
     this.debugMode.addEventListener('change', () => this.updateDebugMode());
     this.zenMode.addEventListener('change', () => this.updateZenMode());
@@ -390,6 +416,7 @@ class CommisionsfinderPopup {
         this.modelTemperature.value = result.modelTemperature;
         this.temperatureValue.textContent = result.modelTemperature;
       }
+      if (this._syncTemperatureTrack) this._syncTemperatureTrack();
       
       if (result.debugMode !== undefined) {
         this.settings.debugMode = result.debugMode;
@@ -411,16 +438,16 @@ class CommisionsfinderPopup {
         this.settings.platforms = { ...this.settings.platforms, ...result.platforms };
         this.platformFuraffinity.checked = this.settings.platforms.furaffinity;
         this.platformBluesky.checked = this.settings.platforms.bluesky;
-        // Twitter is disabled, always set to false regardless of stored settings
-        this.platformTwitter.checked = false;
+        // Twitter is disabled and may be absent from popup markup.
+        if (this.platformTwitter) {
+          this.platformTwitter.checked = false;
+        }
         this.settings.platforms.twitter = false;
       }
       
       // Restore roadmap state
       if (result.roadmapMinimized !== undefined && result.roadmapMinimized) {
         this.roadmapSection.classList.add('minimized');
-        const toggleIcon = this.roadmapToggleBtn.querySelector('.toggle-icon');
-        toggleIcon.textContent = '❯❯';
         this.roadmapToggleBtn.title = 'Expand Roadmap';
         this.roadmapToggleBtn.setAttribute('aria-expanded', 'false');
       } else {
@@ -449,7 +476,7 @@ class CommisionsfinderPopup {
       // Show/hide model selection based on AI enabled status
       const modelSelectionGroup = document.getElementById('modelSelectionGroup');
       if (modelSelectionGroup) {
-        modelSelectionGroup.style.display = this.settings.aiEnabled ? 'block' : 'none';
+        modelSelectionGroup.style.display = this.settings.aiEnabled ? 'flex' : 'none';
       }
     } catch (error) {
       console.error('Error loading settings:', error);
@@ -497,9 +524,14 @@ class CommisionsfinderPopup {
       
       if (response.success) {
         this.currentResults = response.results || [];
+        const progressStorage = await chrome.storage.local.get([
+          'furaffinity_progress', 'bluesky_progress'
+        ]);
+        this.lastScanSettings = response.lastScanSettings || this.inferLegacyLastScanSettings(response.lastScanDate, progressStorage);
         // Clear search instance when new data is loaded
         this.searchInstance = null;
         this.updateLastScanTime(response.lastScanDate);
+        this.updateScanSummary(progressStorage);
         this.updatePlatformFilterOptions();
         this.applyFilters();
         this.updateUI();
@@ -523,14 +555,9 @@ class CommisionsfinderPopup {
           this.scanBtn.disabled = true;
           this.scanBtn.querySelector('.scan-text').textContent = 'Scanning...';
           
-          // Load progress data for each platform
-          const storage = await chrome.storage.local.get([
-            'furaffinity_progress', 'twitter_progress', 'bluesky_progress'
-          ]);
-          
           // Update progress for the most active platform
-          for (const platform of ['furaffinity', 'twitter', 'bluesky']) {
-            const progressData = storage[`${platform}_progress`];
+          for (const platform of ['furaffinity', 'bluesky']) {
+            const progressData = progressStorage[`${platform}_progress`];
             if (progressData && progressData.phase !== 'completed') {
               this.updateScanProgress(platform, progressData);
             }
@@ -539,7 +566,7 @@ class CommisionsfinderPopup {
           // Scan is not actively running - show scan/resume button
           this.showProgress(false);
           this.stopBtn.style.display = 'none';
-          this.scanBtn.style.display = 'block';
+          this.scanBtn.style.display = '';
           this.scanBtn.disabled = false;
           
           // Determine button text based on whether there's incomplete progress
@@ -564,7 +591,7 @@ class CommisionsfinderPopup {
       this.showProgress(false);
       this.showResultsLoading(false);
       this.stopBtn.style.display = 'none';
-      this.scanBtn.style.display = 'block';
+      this.scanBtn.style.display = '';
       this.scanBtn.disabled = false;
       this.scanBtn.querySelector('.scan-text').textContent = 'Scan for Open Commissions';
     }
@@ -576,6 +603,7 @@ class CommisionsfinderPopup {
       bluesky: this.platformBluesky.checked,
       twitter: false // Twitter is disabled, always set to false
     };
+    this.updateScanSummary();
     
     try {
       await chrome.storage.local.set({ platforms: this.settings.platforms });
@@ -596,7 +624,7 @@ class CommisionsfinderPopup {
       // Show/hide model selection based on AI enabled status
       const modelSelectionGroup = document.getElementById('modelSelectionGroup');
       if (modelSelectionGroup) {
-        modelSelectionGroup.style.display = this.settings.aiEnabled ? 'block' : 'none';
+        modelSelectionGroup.style.display = this.settings.aiEnabled ? 'flex' : 'none';
       }
       
       // Re-apply filters in case the mode affects results
@@ -647,6 +675,15 @@ class CommisionsfinderPopup {
     }
     
     try {
+      const scanSettings = this.createScanSettingsSnapshot(enabledPlatforms);
+      this.pendingScanSettings = scanSettings;
+      this.lastScanSettings = scanSettings;
+      this.scanProgressByPlatform = {};
+      enabledPlatforms.forEach(platform => {
+        this.scanProgressByPlatform[platform] = { percentage: 0 };
+      });
+      await chrome.storage.local.set({ activeScanSettings: scanSettings });
+
       // Update UI state immediately
       this.isScanning = true;
       this.updateScanStatus(true);
@@ -658,7 +695,8 @@ class CommisionsfinderPopup {
       // Send scan request - expect quick response
       const response = await chrome.runtime.sendMessage({
         type: 'SCAN_REQUEST',
-        platforms: enabledPlatforms
+        platforms: enabledPlatforms,
+        scanSettings
       });
       
       if (!response.success) {
@@ -676,9 +714,33 @@ class CommisionsfinderPopup {
       this.showProgress(false);
       this.showResultsLoading(false);
       this.stopBtn.style.display = 'none';
-      this.scanBtn.style.display = 'block';
-      this.showError(error.message || 'Failed to start scan');
+        this.scanBtn.style.display = '';
+        this.pendingScanSettings = null;
+        this.showError(error.message || 'Failed to start scan');
     }
+  }
+
+  createScanSettingsSnapshot(platforms) {
+    return {
+      platforms: [...platforms],
+      mode: this.settings.aiEnabled ? 'discriminative' : 'pattern',
+      model: this.settings.aiEnabled ? (this.settings.selectedQuantization || 'full') : null,
+      startedAt: Date.now()
+    };
+  }
+
+  inferLegacyLastScanSettings(lastScanDate, progressStorage = {}) {
+    if (!lastScanDate) return null;
+    const platforms = ['furaffinity', 'bluesky'].filter(platform => {
+      const progress = progressStorage[`${platform}_progress`];
+      return progress?.total > 0 || this.getPlatformResultCount(platform) > 0;
+    });
+    return {
+      platforms: platforms.length ? platforms : ['furaffinity', 'bluesky'],
+      mode: this.settings.aiEnabled ? 'discriminative' : 'pattern',
+      model: this.settings.aiEnabled ? (this.settings.selectedQuantization || 'full') : null,
+      completedAt: lastScanDate
+    };
   }
 
   async stopScan() {
@@ -694,7 +756,7 @@ class CommisionsfinderPopup {
         this.showProgress(false);
         this.showResultsLoading(false);
         this.stopBtn.style.display = 'none';
-        this.scanBtn.style.display = 'block';
+        this.scanBtn.style.display = '';
         this.scanBtn.querySelector('.scan-text').textContent = 'Resume Scan';
       } else {
         throw new Error(response.error || 'Failed to stop scan');
@@ -734,13 +796,18 @@ class CommisionsfinderPopup {
         this.showProgress(false);
         this.showResultsLoading(false);
         this.stopBtn.style.display = 'none';
-        this.scanBtn.style.display = 'block';
+        this.scanBtn.style.display = '';
         this.scanBtn.disabled = false;
         this.scanBtn.querySelector('.scan-text').textContent = 'Scan for Open Commissions';
         this.currentResults = message.data || [];
+        this.lastScanSettings = this.pendingScanSettings || this.createScanSettingsSnapshot(
+          Object.keys(this.settings.platforms).filter(platform => this.settings.platforms[platform])
+        );
+        this.pendingScanSettings = null;
         // Clear search instance when scan finishes
         this.searchInstance = null;
         this.updateLastScanTime(Date.now());
+        this.updateScanSummary();
         this.updatePlatformFilterOptions();
         this.applyFilters();
         this.updateUI();
@@ -754,20 +821,19 @@ class CommisionsfinderPopup {
         this.showProgress(false);
         this.showResultsLoading(false);
         this.stopBtn.style.display = 'none';
-        this.scanBtn.style.display = 'block';
+        this.scanBtn.style.display = '';
         this.scanBtn.disabled = false;
         this.showError(message.error || 'Scan failed');
         break;
 
       case 'MODEL_DOWNLOAD_PROGRESS':
         this.updateProgressText(`Downloading model: ${message.data.status}`);
-        this.progressFill.style.width = `${message.data.progress}%`;
+        this.setOverallProgress(message.data.progress);
         break;
 
       case 'SCAN_PROGRESS_UPDATE':
         // If we receive progress updates but UI doesn't show scanning, fix the state
         if (!this.isScanning && message.data.phase !== 'completed') {
-          console.log('[Popup] Detected active scan from progress update, updating UI state');
           this.isScanning = true;
           this.updateScanStatus(true);
           this.showProgress(true);
@@ -787,7 +853,7 @@ class CommisionsfinderPopup {
         this.showProgress(false);
         this.showResultsLoading(false);
         this.stopBtn.style.display = 'none';
-        this.scanBtn.style.display = 'block';
+        this.scanBtn.style.display = '';
         this.scanBtn.disabled = false;
         this.scanBtn.querySelector('.scan-text').textContent = 'Resume Scan';
         this.showLoginRequiredOverlay(this.loginRequiredPause);
@@ -893,7 +959,7 @@ class CommisionsfinderPopup {
         return fallback;
       }
       return parsed.href;
-    } catch (error) {
+    } catch {
       return fallback;
     }
   }
@@ -907,8 +973,11 @@ class CommisionsfinderPopup {
     return Number.isInteger(limit) ? visibleTags.slice(0, limit) : visibleTags;
   }
 
-  getProfileTagsHtml(result) {
-    const tags = this.getVisibleProfileTags(result, 6);
+  getProfileTagsHtml(result, limit = 12, options = {}) {
+    const allTags = Array.isArray(result.profileTags) ? result.profileTags : [];
+    const tags = options.includeGeneral
+      ? (Number.isInteger(limit) ? allTags.slice(0, limit) : allTags)
+      : this.getVisibleProfileTags(result, limit);
     if (tags.length === 0) return '';
 
     return `
@@ -939,46 +1008,68 @@ class CommisionsfinderPopup {
   }
 
   async loadE621Embeddings() {
-    if (this.e621EmbeddingsLoaded) return;
+    if (this.e621EmbeddingsLoaded) return true;
+    if (this.e621EmbeddingsLoadPromise) return this.e621EmbeddingsLoadPromise;
 
-    try {
-      const [aliases, implications, tags] = await Promise.all([
-        this.loadJsonResource('e621-embeddings/aliases.json'),
-        this.loadJsonResource('e621-embeddings/implications.json'),
-        this.loadJsonResource('e621-embeddings/tags.json'),
-      ]);
+    this.e621EmbeddingsLoadPromise = (async () => {
+      try {
+        const [aliases, implications, tags] = await Promise.all([
+          this.loadJsonResource('e621-embeddings/aliases.json'),
+          this.loadJsonResource('e621-embeddings/implications.json'),
+          this.loadJsonResource('e621-embeddings/tags.json'),
+        ]);
 
-      this.e621AliasMap = new Map([
-        ...Object.entries(E621_TAG_ALIASES),
-        ...Object.entries(aliases || {}).map(([alias, canonical]) => [
-          this.normalizeRawE621Tag(alias),
-          this.normalizeRawE621Tag(canonical),
-        ]),
-      ]);
+        this.e621AliasMap = new Map([
+          ...Object.entries(E621_TAG_ALIASES),
+          ...Object.entries(aliases || {}).map(([alias, canonical]) => [
+            this.normalizeRawE621Tag(alias),
+            this.normalizeRawE621Tag(canonical),
+          ]),
+        ]);
 
-      this.e621ImplicationMap = new Map(Object.entries(implications || {}).map(([childTag, parentTags]) => [
-        this.resolveE621Alias(childTag),
-        [...new Set((Array.isArray(parentTags) ? parentTags : [])
-          .map(parentTag => this.resolveE621Alias(parentTag))
-          .filter(Boolean))],
-      ]));
+        this.e621ImplicationMap = new Map(Object.entries(implications || {}).map(([childTag, parentTags]) => [
+          this.resolveE621Alias(childTag),
+          [...new Set((Array.isArray(parentTags) ? parentTags : [])
+            .map(parentTag => this.resolveE621Alias(parentTag))
+            .filter(Boolean))],
+        ]));
 
-      this.e621Tags = (Array.isArray(tags) ? tags : [])
-        .map(tag => this.resolveE621Alias(tag))
-        .filter(Boolean);
-      this.e621TagExpansionCache.clear();
-      this.e621EmbeddingsLoaded = true;
+        this.e621Tags = (Array.isArray(tags) ? tags : [])
+          .map(tag => this.resolveE621Alias(tag))
+          .filter(Boolean);
+        this.e621TagExpansionCache.clear();
+        this.e621EmbeddingsLoaded = true;
 
-      if (this.debugSearch) {
-        console.log('[Search] Loaded e621 embeddings:', {
-          aliases: this.e621AliasMap.size,
-          implications: this.e621ImplicationMap.size,
-          tags: this.e621Tags.length,
-        });
+        if (this.debugSearch) {
+          console.log('[Search] Loaded e621 embeddings:', {
+            aliases: this.e621AliasMap.size,
+            implications: this.e621ImplicationMap.size,
+            tags: this.e621Tags.length,
+          });
+        }
+        return true;
+      } catch (error) {
+        console.warn('[Search] Failed to load e621 embeddings; falling back to scanned tags only:', error);
+        return false;
+      } finally {
+        this.e621EmbeddingsLoadPromise = null;
       }
-    } catch (error) {
-      console.warn('[Search] Failed to load e621 embeddings; falling back to scanned tags only:', error);
-    }
+    })();
+
+    return this.e621EmbeddingsLoadPromise;
+  }
+
+  primeE621EmbeddingsForSearch() {
+    if (this.e621EmbeddingsLoaded || this.e621EmbeddingsLoadPromise) return;
+
+    this.loadE621Embeddings().then((loaded) => {
+      if (!loaded) return;
+      this.updateTagAutocomplete();
+      if (this.getActiveSearchTerm()) {
+        this.searchInstance = null;
+        this.applyFilters();
+      }
+    });
   }
 
   normalizeRawE621Tag(value) {
@@ -1696,9 +1787,8 @@ class CommisionsfinderPopup {
     
     // Add platform options with counts
     const allPlatforms = [
-      { key: 'furaffinity', name: 'FurAffinity', icon: '🎨' }, // Keep emoji for dropdown text
-      { key: 'bluesky', name: 'Bluesky', icon: '🌊' }, // Keep emoji for dropdown text
-      { key: 'twitter', name: 'Twitter/X', icon: '🐦', disabled: true } // Keep emoji for dropdown text
+      { key: 'furaffinity', name: 'FurAffinity' },
+      { key: 'bluesky', name: 'Bluesky' }
     ];
     
     allPlatforms.forEach(platform => {
@@ -1708,14 +1798,14 @@ class CommisionsfinderPopup {
       
       if (platform.disabled) {
         // Platform is disabled (like Twitter)
-        option.textContent = `${platform.icon} ${platform.name} (Disabled)`;
+        option.textContent = `${platform.name} (Disabled)`;
         option.disabled = true;
         option.style.color = '#6b7280';
       } else if (count > 0) {
-        option.textContent = `${platform.icon} ${platform.name} (${count})`;
+        option.textContent = `${platform.name} (${count})`;
         option.disabled = false;
       } else {
-        option.textContent = `${platform.icon} ${platform.name} (No results)`;
+        option.textContent = `${platform.name} (No results)`;
         option.disabled = true;
         option.style.color = '#6b7280';
       }
@@ -1729,6 +1819,20 @@ class CommisionsfinderPopup {
     } else if (currentValue && availablePlatforms[currentValue] === 0) {
       // Reset to "All Platforms" if selected platform has no results
       platformFilter.value = '';
+    }
+    this.updatePlatformFilterIcon();
+  }
+
+  updatePlatformFilterIcon() {
+    if (!this.platformFilterIcons || !this.platformFilter) return;
+    const value = this.platformFilter.value;
+    if (value === 'furaffinity' || value === 'bluesky') {
+      this.platformFilterIcons.innerHTML = `<img src="${this.escapeAttribute(this.getPlatformIcon(value))}" alt="">`;
+    } else {
+      this.platformFilterIcons.innerHTML = `
+        <img src="${this.escapeAttribute(this.getPlatformIcon('furaffinity'))}" alt="">
+        <img src="${this.escapeAttribute(this.getPlatformIcon('bluesky'))}" alt="">
+      `;
     }
   }
   
@@ -1748,8 +1852,9 @@ class CommisionsfinderPopup {
     }
     
     // Show actual results
-    this.filteredResults.forEach(result => {
+    this.filteredResults.forEach((result, index) => {
       const resultElement = this.createResultElement(result);
+      resultElement.style.setProperty('--result-enter-delay', `${Math.min(index, 8) * 24}ms`);
       this.resultsList.appendChild(resultElement);
     });
     
@@ -1851,19 +1956,8 @@ class CommisionsfinderPopup {
                            confidencePercent >= 50 ? 'medium' : 'low';
     
     const timeAgo = this.formatTimeAgo(result.lastUpdated);
-    const platformIconPaths = this.getPlatformIcons(result);
-    const platformNames = this.formatPlatformNames(result);
-    const profileTagsHtml = this.getProfileTagsHtml(result);
-    
-    // Create platform icon HTML
-    let platformIconsHtml = '';
-    if (Array.isArray(platformIconPaths)) {
-      platformIconsHtml = platformIconPaths.map(iconPath =>
-        `<img src="${this.sanitizeUrl(iconPath)}" alt="" class="platform-icon-img" aria-hidden="true">`
-      ).join('');
-    } else {
-      platformIconsHtml = `<img src="${this.sanitizeUrl(platformIconPaths)}" alt="" class="platform-icon-img" aria-hidden="true">`;
-    }
+    const profileTagsHtml = this.getProfileTagsHtml(result, 16);
+
     // Handle triggers - might be array or string after search processing
     let triggers;
     let hasTriggers = false;
@@ -1897,49 +1991,49 @@ class CommisionsfinderPopup {
     const avatarClasses = this.settings.demoMode ? 'result-avatar demo-blur' : 'result-avatar';
     const safeDisplayName = this.escapeHtml(displayName);
     const safeDisplayNameAttr = this.escapeAttribute(displayName);
-    const safePlatformNames = this.escapeHtml(platformNames);
     const safeTriggers = this.escapeHtml(triggers);
     const safeTriggersAttr = this.escapeAttribute(triggers);
     const safeDetectionText = this.escapeHtml(`detected ${timeAgo}`);
     const safeAvatarUrl = this.sanitizeUrl(result.avatarUrl, this.getDefaultAvatar());
-    
+    const safeBadgeIcon = this.sanitizeUrl(this.getPlatformIcon(result.platform));
+
     element.innerHTML = `
-      <img src="${safeAvatarUrl}"
-           alt="${safeDisplayNameAttr}"
-           class="${avatarClasses}">
+      <div class="result-avatar-wrap">
+        <img src="${safeAvatarUrl}"
+             alt="${safeDisplayNameAttr}"
+             class="${avatarClasses}">
+        ${safeBadgeIcon ? `<span class="result-platform-badge result-platform-badge-${this.escapeAttribute(result.platform)}"><img src="${safeBadgeIcon}" alt="" aria-hidden="true"></span>` : ''}
+      </div>
       <div class="result-info">
-        <button class="result-profile-btn" type="button" aria-label="Open profile for ${safeDisplayNameAttr}">
+        <div class="result-profile-main">
           <div class="result-name" title="${safeDisplayNameAttr}">${safeDisplayName}</div>
-          <div class="result-platform-summary">
-            ${platformIconsHtml} ${safePlatformNames}
-          </div>
           <div class="result-triggers" title="${safeTriggersAttr}">
             ${hasTriggers ? `"${safeTriggers}"<br><span class="detection-time">${safeDetectionText}</span>` : safeTriggers}
           </div>
           ${profileTagsHtml}
-        </button>
+        </div>
         ${result.platforms && result.platforms.length > 1 ?
           `<div class="result-platform-menu">
             <button class="platform-dropdown-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose platform for ${safeDisplayNameAttr}">Choose platform ▾</button>
             ${this.createPlatformDropdown(result)}
           </div>` : ''}
       </div>
-      <div class="result-confidence">
+      <div class="result-side">
         <button class="confidence-score ${confidenceClass}" type="button" aria-label="View confidence details for ${safeDisplayNameAttr}">
           ${confidencePercent}%
         </button>
-      </div>
-      <div class="result-actions">
-        <button class="action-btn favorite-btn ${isFavorited ? 'active' : ''}"
-                data-tooltip="${isFavorited ? 'Remove from Favorites' : 'Add to Favorites'}"
-                data-artist-id="${artistId}">
-          ${isFavorited ? '⭐' : '☆'}
-        </button>
-        <button class="action-btn blacklist-btn ${isBlacklisted ? 'active' : ''}"
-                data-tooltip="${isBlacklisted ? 'Remove from Blacklist' : 'Add to Blacklist'}"
-                data-artist-id="${artistId}">
-          ⛔
-        </button>
+        <div class="result-actions">
+          <button class="action-btn favorite-btn ${isFavorited ? 'active' : ''}"
+                  data-tooltip="${isFavorited ? 'Remove from Favorites' : 'Add to Favorites'}"
+                  data-artist-id="${artistId}">
+            ${this.getFavoriteIconSvg(isFavorited)}
+          </button>
+          <button class="action-btn blacklist-btn ${isBlacklisted ? 'active' : ''}"
+                  data-tooltip="${isBlacklisted ? 'Remove from Blacklist' : 'Add to Blacklist'}"
+                  data-artist-id="${artistId}">
+            ${this.getBlacklistIconSvg()}
+          </button>
+        </div>
       </div>
       <div class="confidence-details-wrapper">
         <div class="confidence-details">
@@ -1964,13 +2058,23 @@ class CommisionsfinderPopup {
       });
     }
     
-    const profileButton = element.querySelector('.result-profile-btn');
-    if (profileButton) {
-      profileButton.addEventListener('click', () => {
+    // Whole card opens the profile (inner buttons stopPropagation)
+    element.setAttribute('role', 'button');
+    element.setAttribute('tabindex', '0');
+    element.setAttribute('aria-label', `Open profile for ${displayName}`);
+    element.addEventListener('click', () => {
+      this.openArtistProfile(result);
+    });
+    element.addEventListener('keydown', (e) => {
+      if (e.target !== element) {
+        return;
+      }
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
         this.openArtistProfile(result);
-      });
-    }
-    
+      }
+    });
+
     // Add handlers for platform dropdown
     const dropdownTrigger = element.querySelector('.platform-dropdown-trigger');
     const dropdown = element.querySelector('.platform-dropdown');
@@ -2017,8 +2121,9 @@ class CommisionsfinderPopup {
       e.stopPropagation();
       this.toggleFavorite(artistId);
       favoriteBtn.classList.toggle('active');
+      this.bumpActionButton(favoriteBtn);
       const isFav = favoriteBtn.classList.contains('active');
-      favoriteBtn.textContent = isFav ? '⭐' : '☆';
+      favoriteBtn.innerHTML = this.getFavoriteIconSvg(isFav);
       favoriteBtn.dataset.tooltip = isFav ? 'Remove from Favorites' : 'Add to Favorites';
       // Toggle the CSS class on the result item
       element.classList.toggle('favorited');
@@ -2028,7 +2133,9 @@ class CommisionsfinderPopup {
       e.stopPropagation();
       this.toggleBlacklist(artistId);
       blacklistBtn.classList.toggle('active');
+      this.bumpActionButton(blacklistBtn);
       const isBlack = blacklistBtn.classList.contains('active');
+      blacklistBtn.innerHTML = this.getBlacklistIconSvg();
       blacklistBtn.dataset.tooltip = isBlack ? 'Remove from Blacklist' : 'Add to Blacklist';
       // Toggle the CSS class on the result item
       element.classList.toggle('blacklisted');
@@ -2038,13 +2145,24 @@ class CommisionsfinderPopup {
         const favBtn = element.querySelector('.favorite-btn');
         if (favBtn) {
           favBtn.classList.remove('active');
-          favBtn.textContent = '☆';
+          this.bumpActionButton(favBtn);
+          favBtn.innerHTML = this.getFavoriteIconSvg(false);
           favBtn.dataset.tooltip = 'Add to Favorites';
         }
       }
     });
     
     return element;
+  }
+
+  bumpActionButton(button) {
+    if (!button) return;
+    button.classList.remove('action-btn-bump');
+    void button.offsetWidth;
+    button.classList.add('action-btn-bump');
+    button.addEventListener('animationend', () => {
+      button.classList.remove('action-btn-bump');
+    }, { once: true });
   }
   
   createPlatformDropdown(result) {
@@ -2078,21 +2196,725 @@ class CommisionsfinderPopup {
   }
   
   openArtistProfile(result, platformOverride = null) {
-    let urlToOpen = result.profileUrl;
-    
-    // If a specific platform is requested and we have platform data for it
-    if (platformOverride && result.platformData && result.platformData[platformOverride]) {
-      urlToOpen = result.platformData[platformOverride].profileUrl;
+    this.showArtistProfile(result, platformOverride);
+  }
+
+  getPlatformSnapshot(result, platformOverride = null) {
+    if (!platformOverride || !result.platformData || !result.platformData[platformOverride]) {
+      return result;
     }
-    
-    chrome.tabs.create({ url: urlToOpen });
+
+    return {
+      ...result,
+      ...result.platformData[platformOverride],
+      platform: platformOverride,
+      platforms: result.platforms,
+      platformData: result.platformData,
+      profileTags: result.profileTags,
+      tagAliases: result.tagAliases,
+      tagMatches: result.tagMatches,
+      e621ArtistTag: result.e621ArtistTag,
+      e621PostCount: result.e621PostCount
+    };
+  }
+
+  classifyProfileUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+      const path = parsed.pathname.replace(/\/$/, '');
+
+      if (host === 'bsky.app') {
+        return { platform: 'bluesky', name: 'Bluesky', label: path.split('/').filter(Boolean).pop() || host };
+      }
+      if (host === 'furaffinity.net') {
+        return { platform: 'furaffinity', name: 'FurAffinity', label: path.split('/').filter(Boolean).pop() || host };
+      }
+      if (host === 'twitter.com' || host === 'x.com') {
+        return { platform: 'twitter', name: 'Twitter/X', label: path.split('/').filter(Boolean)[0] || host };
+      }
+      if (host === 't.me' || host === 'telegram.me') {
+        return { platform: 'telegram', name: 'Telegram', label: `${host}${path}` };
+      }
+      if (host === 'discord.gg' || host === 'discord.com' || host === 'discordapp.com') {
+        return { platform: 'discord', name: 'Discord', label: 'Discord' };
+      }
+      if (host.endsWith('.carrd.co') || host === 'carrd.co') {
+        return { platform: 'website', name: 'Website', label: host };
+      }
+      if (host === 'linktr.ee' || host === 'linktree.com') {
+        return { platform: 'website', name: 'Website', label: `${host}${path}` };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Build the list of social/profile links for an artist
+  getProfileLinks(result) {
+    const links = [];
+    const seen = new Set();
+    const platforms = (Array.isArray(result.platforms) && result.platforms.length)
+      ? result.platforms
+      : [result.platform];
+
+    platforms.forEach(platform => {
+      if (!platform) return;
+      const data = result.platformData && result.platformData[platform];
+      const url = (data && data.profileUrl) || (platform === result.platform ? result.profileUrl : '');
+      const safeUrl = this.sanitizeUrl(url);
+      if (!safeUrl || seen.has(safeUrl)) return;
+      seen.add(safeUrl);
+      links.push({
+        platform,
+        url: safeUrl,
+        name: this.formatPlatformName(platform),
+        username: (data && data.username) || (platform === result.platform ? result.username : ''),
+        icon: this.sanitizeUrl(this.getPlatformIcon(platform))
+      });
+    });
+
+    // e621 artist tag link (if matched during scanning)
+    if (result.e621ArtistTag) {
+      const e621Url = this.sanitizeUrl(`https://e621.net/posts?tags=${encodeURIComponent(result.e621ArtistTag)}`);
+      if (e621Url && !seen.has(e621Url)) {
+        seen.add(e621Url);
+        links.push({
+          platform: 'e621',
+          url: e621Url,
+          name: 'e621',
+          icon: this.sanitizeUrl(this.getPlatformIcon('e621'))
+        });
+      }
+    }
+
+    const bioTexts = [
+      result.bio,
+      ...Object.values(result.platformData || {}).map(data => data && data.bio)
+    ].filter(Boolean);
+    const urlRegex = /(https?:\/\/[^\s<]+)/g;
+    bioTexts.forEach(text => {
+      let match;
+      while ((match = urlRegex.exec(text)) !== null) {
+        const rawUrl = match[0].replace(/[.,;:!?)\]]+$/, '');
+        const safeUrl = this.sanitizeUrl(rawUrl);
+        if (!safeUrl || seen.has(safeUrl)) continue;
+        const classified = this.classifyProfileUrl(safeUrl);
+        if (!classified) continue;
+        seen.add(safeUrl);
+        links.push({
+          platform: classified.platform,
+          url: safeUrl,
+          name: classified.name,
+          username: classified.label,
+          icon: this.sanitizeUrl(this.getPlatformIcon(classified.platform))
+        });
+      }
+    });
+
+    return links;
+  }
+
+  getExternalLinkLabel(url) {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}`.replace(/\/$/, '');
+    } catch {
+      return url;
+    }
+  }
+
+  getProfileHandleLabel(link) {
+    if (link.platform === 'telegram') {
+      return link.username || link.name;
+    }
+    if (link.username) {
+      return `@${link.username}`;
+    }
+    return link.name;
+  }
+
+  // Collect recent works/uploads across platform components
+  getProfileWorks(result) {
+    const components = result.analysis?.components || {};
+    const worksByKey = new Map();
+    const addWork = (item) => {
+      if (!item) return;
+      const key = item.url || item.id || `${item.title || item.text}-${item.date || item.timestamp || ''}`;
+      const existing = worksByKey.get(key) || {};
+      worksByKey.set(key, {
+        ...existing,
+        ...item,
+        thumbnailUrl: item.thumbnailUrl || existing.thumbnailUrl,
+        imageUrl: item.imageUrl || existing.imageUrl,
+        previewUrl: item.previewUrl || existing.previewUrl,
+        description: item.description || existing.description,
+        date: item.date || existing.date
+      });
+    };
+
+    if (Array.isArray(result.galleryItems)) {
+      result.galleryItems.forEach(addWork);
+    }
+    if (Array.isArray(result.posts)) {
+      result.posts.forEach(addWork);
+    }
+    const pools = [components.gallery, components.posts];
+    pools.forEach(pool => {
+      if (pool && Array.isArray(pool.items)) {
+        pool.items.forEach(addWork);
+      }
+    });
+    return [...worksByKey.values()].slice(0, 8);
+  }
+
+  getProfileBios(result, profile) {
+    const bios = [];
+    const seen = new Set();
+    const addBio = (bio) => {
+      if (!bio || typeof bio !== 'string') return;
+      const trimmed = bio.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      bios.push(this.settings.demoMode ? this.getDemoLoremText(trimmed, 420) : trimmed);
+    };
+
+    addBio(profile.bio);
+    if (result.platformData) {
+      Object.values(result.platformData).forEach(data => addBio(data && data.bio));
+    }
+    addBio(result.bio);
+
+    return bios;
+  }
+
+  getProfileStatusMeta(profile) {
+    const confidencePercent = this.getDisplayConfidence(profile);
+    const status = profile.commissionStatus || 'unclear';
+
+    if (status === 'open' && confidencePercent >= 70) {
+      return { className: 'open', icon: '✓', label: 'Commissions Open' };
+    }
+
+    if (status === 'closed') {
+      return { className: 'closed', icon: '−', label: 'Closed' };
+    }
+
+    return { className: 'unclear', icon: '?', label: 'Unsure' };
+  }
+
+  getFavoriteIconSvg(active = false) {
+    return `
+      <svg class="action-icon favorite-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3.7 14.7 9l5.9.9-4.3 4.2 1 5.9-5.3-2.8L6.7 20l1-5.9-4.3-4.2L9.3 9 12 3.7Z" ${active ? 'fill="currentColor"' : 'fill="none"'} stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+      </svg>
+    `;
+  }
+
+  getBlacklistIconSvg() {
+    return `
+      <svg class="action-icon blacklist-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M7.1 16.9 16.9 7.1" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+    `;
+  }
+
+  getWorkImageUrl(item) {
+    return this.sanitizeUrl(
+      item.thumbnailUrl ||
+      item.thumbnail ||
+      item.imageUrl ||
+      item.image ||
+      item.previewUrl ||
+      ''
+    );
+  }
+
+  getWorkDateLabel(item) {
+    const rawDate = item.date || item.dateTimestamp || item.createdAt || item.timestamp || item.lastUpdated;
+    if (!rawDate) return '';
+    return this.formatTimeAgo(rawDate);
+  }
+
+  formatCompactNumber(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '';
+    return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(number);
+  }
+
+  getProfileStatsHtml(profile) {
+    if (profile.platform === 'bluesky' && Number.isFinite(Number(profile.followerCount))) {
+      return `<div class="profile-stats-line">${this.escapeHtml(this.formatCompactNumber(profile.followerCount))} followers</div>`;
+    }
+
+    if (profile.platform === 'furaffinity') {
+      const stats = profile.stats || {};
+      const parts = [
+        ['Views', profile.viewCount ?? stats.views],
+        ['Submissions', profile.submissionCount ?? stats.submissions],
+        ['Favs', profile.favCount ?? stats.favs]
+      ]
+        .filter(([, value]) => Number.isFinite(Number(value)))
+        .map(([label, value]) => `${label}: ${this.formatCompactNumber(value)}`);
+      if (parts.length) {
+        return `<div class="profile-stats-line">${this.escapeHtml(parts.join(' · '))}</div>`;
+      }
+    }
+
+    return '';
+  }
+
+  // Escape text and turn URLs into clickable links (opened via the [data-url] handler)
+  linkifyText(text) {
+    const urlRegex = /(https?:\/\/[^\s<]+)/g;
+    let out = '';
+    let lastIndex = 0;
+    let match;
+    while ((match = urlRegex.exec(text)) !== null) {
+      out += this.escapeHtml(text.slice(lastIndex, match.index));
+      const trailing = (match[0].match(/[.,;:!?)\]]+$/) || [''])[0];
+      const rawUrl = match[0].slice(0, match[0].length - trailing.length);
+      const safeUrl = this.sanitizeUrl(rawUrl);
+      if (safeUrl) {
+        out += `<a class="profile-bio-link" role="link" tabindex="0" data-url="${this.escapeAttribute(safeUrl)}">${this.escapeHtml(rawUrl)}</a>`;
+      } else {
+        out += this.escapeHtml(rawUrl);
+      }
+      out += this.escapeHtml(trailing);
+      lastIndex = match.index + match[0].length;
+    }
+    out += this.escapeHtml(text.slice(lastIndex));
+    return out.replace(/\n/g, '<br>');
+  }
+
+  async hydrateProfileHeroBackground(hero, profile, result) {
+    try {
+      const bannerUrl = await this.fetchProfileBannerUrl(profile) || await this.fetchProfileBannerUrl(result);
+      const safeBannerUrl = this.sanitizeUrl(bannerUrl);
+      if (!safeBannerUrl || !hero?.isConnected) return;
+
+      hero.style.backgroundImage = `url("${safeBannerUrl}")`;
+      hero.classList.add('has-banner');
+      hero.classList.remove('profile-hero-fallback');
+    } catch {
+      // Missing banners should never block opening an artist profile.
+    }
+  }
+
+  async fetchProfileBannerUrl(profile) {
+    if (!profile || !profile.platform) return '';
+
+    if (profile.platform === 'bluesky') {
+      const actor = profile.username || '';
+      if (!actor) return '';
+      const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(actor)}`);
+      if (!response.ok) return '';
+      const data = await response.json();
+      return data.banner || '';
+    }
+
+    if (profile.platform === 'furaffinity') {
+      const profileUrl = profile.profileUrl || (profile.username ? `https://www.furaffinity.net/user/${profile.username}/` : '');
+      const safeProfileUrl = this.sanitizeUrl(profileUrl);
+      if (!safeProfileUrl) return '';
+      const response = await fetch(safeProfileUrl);
+      if (!response.ok) return '';
+      const html = await response.text();
+      return this.extractProfileBackgroundFromHtml(html, safeProfileUrl);
+    }
+
+    return '';
+  }
+
+  extractProfileBackgroundFromHtml(html, profileUrl) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const resolve = (rawUrl) => {
+      if (!rawUrl) return '';
+      try {
+        const cleaned = String(rawUrl)
+          .replace(/^url\(["']?|["']?\)$/g, '')
+          .replace(/^["']|["']$/g, '');
+        return new URL(cleaned, profileUrl).href;
+      } catch {
+        return '';
+      }
+    };
+    const fromStyle = (element) => {
+      const style = element?.getAttribute('style') || '';
+      const match = style.match(/url\(["']?([^"')]+)["']?\)/i);
+      return resolve(match?.[1]);
+    };
+    const fromImage = (image) => {
+      const srcset = image?.getAttribute('srcset')?.split(',')?.[0]?.trim()?.split(/\s+/)?.[0];
+      return resolve(
+        image?.getAttribute('src') ||
+        image?.getAttribute('data-src') ||
+        image?.getAttribute('data-fullview-src') ||
+        image?.getAttribute('data-preview-src') ||
+        srcset
+      );
+    };
+
+    const imageSelectors = [
+      '.userpage-profile-banner img',
+      '.userpage-banner img',
+      '.profile-banner img',
+      '#userpage-header img',
+      '[class*="banner" i] img',
+      '[id*="banner" i] img',
+      '[class*="cover" i] img',
+      '[id*="cover" i] img',
+      'img[src*="/userbanners/"]',
+      'img[src*="/banners/"]',
+      'img[src*="banner"]'
+    ];
+
+    for (const selector of imageSelectors) {
+      const url = fromImage(doc.querySelector(selector));
+      if (url) return url;
+    }
+
+    const styledCandidates = [
+      ...doc.querySelectorAll('[class*="banner" i], [id*="banner" i], [class*="cover" i], [id*="cover" i], [class*="header" i], [id*="header" i], [style*="background"]')
+    ];
+
+    for (const element of styledCandidates) {
+      const url = fromStyle(element);
+      if (url && /banner|cover|userpage|furaffinity|facdn|fa\.net/i.test(url)) {
+        return url;
+      }
+    }
+
+    return '';
+  }
+
+  setProfileThemeVars(page, theme) {
+    if (!page || !theme) return;
+    page.style.setProperty('--profile-theme-primary', theme.primary);
+    page.style.setProperty('--profile-theme-secondary', theme.secondary);
+    page.style.setProperty('--profile-theme-accent', theme.accent);
+  }
+
+  getFallbackProfileTheme(platform = '') {
+    const themes = {
+      bluesky: { primary: '13 35 64', secondary: '8 14 32', accent: '65 156 255' },
+      furaffinity: { primary: '58 35 17', secondary: '18 17 22', accent: '235 129 39' }
+    };
+    return themes[platform] || { primary: '34 25 55', secondary: '13 14 28', accent: '142 119 255' };
+  }
+
+  rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h = 0;
+    let s = 0;
+    const l = (max + min) / 2;
+
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h /= 6;
+    }
+
+    return { h, s, l };
+  }
+
+  hslToRgb(h, s, l) {
+    const hueToRgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+
+    if (s === 0) {
+      const gray = Math.round(l * 255);
+      return [gray, gray, gray];
+    }
+
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    return [
+      Math.round(hueToRgb(p, q, h + 1 / 3) * 255),
+      Math.round(hueToRgb(p, q, h) * 255),
+      Math.round(hueToRgb(p, q, h - 1 / 3) * 255)
+    ];
+  }
+
+  formatRgbTriplet(rgb) {
+    return rgb.map(value => Math.max(0, Math.min(255, Math.round(value)))).join(' ');
+  }
+
+  async extractAvatarTheme(avatarUrl, platform = '') {
+    const safeAvatarUrl = this.sanitizeUrl(avatarUrl);
+    if (!safeAvatarUrl) return this.getFallbackProfileTheme(platform);
+    if (this.profileThemeCache.has(safeAvatarUrl)) {
+      return this.profileThemeCache.get(safeAvatarUrl);
+    }
+
+    const response = await fetch(safeAvatarUrl);
+    if (!response.ok) throw new Error('Avatar theme fetch failed');
+    const blob = await response.blob();
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    const size = 48;
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0, size, size);
+    bitmap.close?.();
+
+    const data = context.getImageData(0, 0, size, size).data;
+    let rSum = 0;
+    let gSum = 0;
+    let bSum = 0;
+    let weightSum = 0;
+    let accent = [142, 119, 255];
+    let accentScore = -1;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3];
+      if (alpha < 96) continue;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const hsl = this.rgbToHsl(r, g, b);
+      if (hsl.l < 0.05 || hsl.l > 0.96) continue;
+
+      const weight = 0.55 + hsl.s;
+      rSum += r * weight;
+      gSum += g * weight;
+      bSum += b * weight;
+      weightSum += weight;
+
+      const score = hsl.s * (1 - Math.abs(hsl.l - 0.52));
+      if (score > accentScore) {
+        accentScore = score;
+        accent = [r, g, b];
+      }
+    }
+
+    if (!weightSum) return this.getFallbackProfileTheme(platform);
+
+    const avg = [rSum / weightSum, gSum / weightSum, bSum / weightSum];
+    const avgHsl = this.rgbToHsl(avg[0], avg[1], avg[2]);
+    const accentHsl = this.rgbToHsl(accent[0], accent[1], accent[2]);
+    const primary = this.hslToRgb(avgHsl.h, Math.max(0.24, avgHsl.s * 0.8), 0.18);
+    const secondary = this.hslToRgb((avgHsl.h + 0.07) % 1, Math.max(0.2, avgHsl.s * 0.55), 0.08);
+    const vibrant = this.hslToRgb(accentHsl.h, Math.max(0.44, accentHsl.s), Math.min(0.68, Math.max(0.42, accentHsl.l)));
+    const theme = {
+      primary: this.formatRgbTriplet(primary),
+      secondary: this.formatRgbTriplet(secondary),
+      accent: this.formatRgbTriplet(vibrant)
+    };
+    this.profileThemeCache.set(safeAvatarUrl, theme);
+    return theme;
+  }
+
+  async applyProfileTheme(page, avatarUrl, platform) {
+    this.setProfileThemeVars(page, this.getFallbackProfileTheme(platform));
+    try {
+      const theme = await this.extractAvatarTheme(avatarUrl, platform);
+      if (page?.isConnected) {
+        this.setProfileThemeVars(page, theme);
+      }
+    } catch {
+      // Keep the platform fallback if palette extraction fails.
+    }
+  }
+
+  showArtistProfile(result, platformOverride = null) {
+    const page = document.getElementById('artistProfilePage');
+    const scroll = document.getElementById('profileScroll');
+    const footer = document.getElementById('profileFooter');
+    if (!page || !scroll || !footer) return;
+
+    const profile = this.getPlatformSnapshot(result, platformOverride);
+    const statusMeta = this.getProfileStatusMeta(profile);
+    const confidencePercent = this.getDisplayConfidence(profile);
+
+    const rawDisplayName = profile.displayName || result.displayName || profile.username || 'Unknown Artist';
+    const displayName = this.settings.demoMode ? this.getDemoDisplayName(rawDisplayName) : rawDisplayName;
+    const username = profile.username || result.username || '';
+
+    const safeName = this.escapeHtml(displayName || 'Unknown Artist');
+    const safeUsername = this.escapeHtml(username);
+    const avatarClasses = this.settings.demoMode ? 'profile-avatar demo-blur' : 'profile-avatar';
+    const safeAvatarUrl = this.sanitizeUrl(profile.avatarUrl || result.avatarUrl, this.getDefaultAvatar());
+    this.applyProfileTheme(page, safeAvatarUrl, profile.platform || result.platform);
+    const safeBannerUrl = this.sanitizeUrl(
+      profile.profileBackgroundUrl ||
+      profile.bannerUrl ||
+      profile.banner ||
+      profile.backgroundUrl ||
+      result.profileBackgroundUrl ||
+      result.bannerUrl ||
+      result.banner ||
+      result.backgroundUrl ||
+      ''
+    );
+
+    const links = this.getProfileLinks(result);
+    const bios = this.getProfileBios(result, profile);
+    const handleLinks = links.filter(l => l.platform !== 'e621');
+    const usernamesHtml = handleLinks.length
+      ? handleLinks.map(l => `<span class="profile-handle platform-${this.escapeAttribute(l.platform)}">${l.icon ? `<img src="${l.icon}" alt="" aria-hidden="true">` : ''}<span>${this.escapeHtml(this.getProfileHandleLabel(l))}</span></span>`).join('')
+      : (username ? `<span class="profile-handle">@${safeUsername}</span>` : '');
+    const profileStatsHtml = this.getProfileStatsHtml(profile);
+
+    const works = this.getProfileWorks(profile);
+    const worksHtml = works.length ? `
+      <section class="profile-section">
+        <h3 class="profile-section-title">Recent Work</h3>
+        <div class="profile-works">
+          ${works.map(item => {
+            const itemStatus = this.getStatusClass(item.commissionStatus);
+            const itemTitle = item.title || item.text || 'Untitled';
+            const demoTitle = this.settings.demoMode ? this.getDemoLoremText(itemTitle, 40) : itemTitle;
+            const safeWorkUrl = this.sanitizeUrl(item.url);
+            const safeWorkUrlAttr = this.escapeAttribute(safeWorkUrl);
+            const safeImageUrl = this.getWorkImageUrl(item);
+            const safeImageUrlAttr = this.escapeAttribute(safeImageUrl);
+            const dateLabel = this.getWorkDateLabel(item);
+            return `
+              <button class="profile-work" type="button" ${safeWorkUrl ? `data-url="${safeWorkUrlAttr}"` : ''}>
+                ${safeImageUrl ? `<img src="${safeImageUrlAttr}" alt="" class="profile-work-image">` : '<span class="profile-work-placeholder" aria-hidden="true"></span>'}
+                <span class="profile-work-title">${this.escapeHtml(demoTitle)}</span>
+                ${dateLabel ? `<span class="profile-work-date">${this.escapeHtml(dateLabel)}</span>` : ''}
+                <span class="profile-work-status ${itemStatus}">${this.getStatusLabel(item.commissionStatus).replace(/^[^\s]+\s/, '')}</span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+      </section>
+    ` : '';
+
+    scroll.innerHTML = `
+      <button class="profile-back-btn" id="profileBackBtn" type="button" aria-label="Back to results">
+        <span aria-hidden="true">←</span> Back
+      </button>
+      <div class="profile-hero ${safeBannerUrl ? 'has-banner' : 'profile-hero-fallback'}">
+        <div class="profile-hero-scrim"></div>
+        <div class="profile-pawmark" aria-hidden="true"></div>
+        <div class="profile-avatar-wrap">
+          <img src="${safeAvatarUrl}" alt="${this.escapeAttribute(displayName)}" class="${avatarClasses}">
+          <span class="profile-status-orb ${statusMeta.className}" title="${this.escapeAttribute(statusMeta.label)}">
+            <span class="profile-status-icon" aria-hidden="true">${this.escapeHtml(statusMeta.icon)}</span>
+            <span class="profile-status-text">${this.escapeHtml(statusMeta.label)}</span>
+          </span>
+        </div>
+      </div>
+      <div class="profile-identity">
+        <h2 class="profile-name">${safeName}</h2>
+        <div class="profile-handles">${usernamesHtml}</div>
+        ${profileStatsHtml}
+        <div class="profile-confidence-pill ${confidencePercent >= 70 ? 'high' : confidencePercent >= 50 ? 'medium' : 'low'}">${confidencePercent}% match</div>
+      </div>
+      ${bios.length ? `<section class="profile-section profile-about-section">${bios.map(bio => `<p class="profile-bio">${this.linkifyText(bio)}</p>`).join('')}</section>` : ''}
+      ${worksHtml}
+    `;
+
+    const hero = scroll.querySelector('.profile-hero');
+    if (hero && safeBannerUrl) {
+      hero.style.backgroundImage = `url("${safeBannerUrl}")`;
+    }
+    if (hero) {
+      this.hydrateProfileHeroBackground(hero, profile, result);
+    }
+
+    footer.innerHTML = links.length
+      ? links.map(l => `
+          <button class="profile-link-btn" type="button" data-url="${this.escapeAttribute(l.url)}">
+            ${l.icon ? `<img src="${l.icon}" alt="" aria-hidden="true">` : '<span class="profile-link-glyph" aria-hidden="true">↗</span>'}
+            <span class="platform-name platform-${this.escapeAttribute(l.platform)}">${this.escapeHtml(l.name)}</span>
+          </button>
+        `).join('')
+      : '<span class="profile-no-links">No links found</span>';
+
+    // Avatar fallback
+    const avatarImg = scroll.querySelector('.profile-avatar');
+    if (avatarImg) {
+      avatarImg.addEventListener('error', () => { avatarImg.src = this.getDefaultAvatar(); });
+    }
+
+    // Back button
+    const backBtn = scroll.querySelector('#profileBackBtn');
+    if (backBtn) backBtn.addEventListener('click', () => this.hideArtistProfile());
+
+    // Open links / works in new tabs
+    page.querySelectorAll('[data-url]').forEach(el => {
+      const open = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const url = el.dataset.url;
+        if (url) chrome.tabs.create({ url });
+      };
+      el.addEventListener('click', open);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          open(e);
+        }
+      });
+    });
+
+    scroll.scrollTop = 0;
+    this.lastArtistProfileFocus = document.activeElement;
+    page.style.display = 'flex';
+    page.classList.add('fade-in');
+    document.documentElement.classList.add('profile-open');
+    document.body.classList.add('profile-open');
+    this.activateFocusTrap(page, () => this.hideArtistProfile());
+  }
+
+  hideArtistProfile() {
+    const page = document.getElementById('artistProfilePage');
+    if (!page) {
+      return;
+    }
+
+    const finishClose = () => {
+      page.style.display = 'none';
+      page.classList.remove('fade-in', 'profile-exit');
+      document.documentElement.classList.remove('profile-open');
+      document.body.classList.remove('profile-open');
+      this.deactivateFocusTrap();
+      if (this.lastArtistProfileFocus && typeof this.lastArtistProfileFocus.focus === 'function') {
+        this.lastArtistProfileFocus.focus();
+        this.lastArtistProfileFocus = null;
+      }
+    };
+
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      finishClose();
+      return;
+    }
+
+    page.classList.add('profile-exit');
+    page.addEventListener('animationend', finishClose, { once: true });
+    setTimeout(() => {
+      if (page.classList.contains('profile-exit')) {
+        finishClose();
+      }
+    }, 240);
   }
   
   getPlatformIcon(platform) {
     const icons = {
       furaffinity: '../logos/fa.webp',
       bluesky: '../logos/bsky.svg',
-      twitter: '../logos/twitter.svg'
+      twitter: '../logos/twitter.svg',
+      e621: '../logos/e621.svg',
+      telegram: '../logos/telegram.svg',
+      discord: '../logos/discord.svg',
+      website: '../logos/link.svg'
     };
     return icons[platform] || '🔍';
   }
@@ -2112,7 +2934,11 @@ class CommisionsfinderPopup {
     const names = {
       furaffinity: 'FurAffinity',
       bluesky: 'Bluesky',
-      twitter: 'Twitter/X'
+      twitter: 'Twitter/X',
+      e621: 'e621',
+      telegram: 'Telegram',
+      discord: 'Discord',
+      website: 'Website'
     };
     return names[platform] || platform;
   }
@@ -2479,8 +3305,20 @@ class CommisionsfinderPopup {
 }
   
   formatTimeAgo(timestamp) {
+    const rawTimestamp = typeof timestamp === 'string' ? timestamp.trim() : timestamp;
+    let then = Number(rawTimestamp);
+    if (typeof rawTimestamp === 'string' && rawTimestamp !== '' && !Number.isFinite(then)) {
+      then = Date.parse(rawTimestamp);
+    }
+    if (Number.isFinite(then) && then > 0 && then < 100000000000) {
+      then *= 1000;
+    }
+    if (!Number.isFinite(then) || then <= 0) {
+      return '';
+    }
+
     const now = Date.now();
-    const diff = now - timestamp;
+    const diff = Math.max(0, now - then);
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
@@ -2500,6 +3338,111 @@ class CommisionsfinderPopup {
     const timeAgo = this.formatTimeAgo(timestamp);
     this.lastScan.textContent = `Last scan: ${timeAgo}`;
   }
+
+  getPlatformResultCount(platform) {
+    return this.currentResults.filter(result => {
+      if (result.platform === platform) return true;
+      return Array.isArray(result.platforms) && result.platforms.includes(platform);
+    }).length;
+  }
+
+  formatPlatformCount(count) {
+    return `${count || 0} profile${count === 1 ? '' : 's'}`;
+  }
+
+  updateScanSummary(progressByPlatform = {}) {
+    Object.entries(progressByPlatform || {}).forEach(([key, value]) => {
+      if (key.endsWith('_progress')) {
+        this.scanProgressByPlatform[key.replace('_progress', '')] = value || {};
+      }
+    });
+
+    ['furaffinity', 'bluesky'].forEach(platform => {
+      const progress = progressByPlatform[`${platform}_progress`] || {};
+      const total = Number.isFinite(progress.total) && progress.total > 0
+        ? progress.total
+        : this.getPlatformResultCount(platform);
+      const countEl = this.platformProfileCounts?.[platform];
+      if (countEl) {
+        countEl.textContent = this.formatPlatformCount(total);
+      }
+    });
+
+    const scanSettings = this.lastScanSettings;
+    const sourcePlatforms = scanSettings?.platforms || [];
+    const enabledSourceNames = scanSettings
+      ? sourcePlatforms.map(platform => platform === 'furaffinity' ? 'FA' : this.formatPlatformName(platform))
+      : [];
+    const sourceStat = this.scanStatusStats?.querySelector('[data-scan-stat="sources"]');
+    if (sourceStat) {
+      sourceStat.textContent = scanSettings && enabledSourceNames.length
+        ? `Last sources: ${enabledSourceNames.join(' + ')}`
+        : 'Last scan: none yet';
+    }
+
+    const modeStat = this.scanStatusStats?.querySelector('[data-scan-stat="mode"]');
+    if (modeStat) {
+      modeStat.textContent = scanSettings
+        ? this.formatScanMode(scanSettings)
+        : 'Ready';
+    }
+
+    this.updateOverallScanFill();
+  }
+
+  getPlatformProgressPercent(platform) {
+    if (!this.isScanning && this.lastScanSettings?.platforms?.includes(platform)) {
+      return 100;
+    }
+
+    const progress = this.scanProgressByPlatform?.[platform] || {};
+    if (progress.phase === 'completed') return 100;
+    if (Number.isFinite(progress.percentage)) return Math.max(0, Math.min(100, progress.percentage));
+    if (Number.isFinite(progress.completed) && Number.isFinite(progress.total) && progress.total > 0) {
+      return Math.max(0, Math.min(100, (progress.completed / progress.total) * 100));
+    }
+
+    return 0;
+  }
+
+  updateOverallScanFill() {
+    if (!this.scanStatus) return;
+
+    const fills = window.__scanFills || {};
+    const platforms = (this.lastScanSettings?.platforms?.length
+      ? this.lastScanSettings.platforms
+      : ['furaffinity', 'bluesky'].filter(platform => this.settings.platforms[platform]))
+      .filter(platform => platform === 'furaffinity' || platform === 'bluesky');
+
+    const allKnown = ['furaffinity', 'bluesky'];
+    allKnown.forEach((p) => {
+      if (fills[p]) {
+        fills[p].el.style.left = '0%';
+        fills[p].el.style.width = '0%';
+      }
+    });
+
+    if (!platforms.length) return;
+
+    const segment = 100 / platforms.length;
+    let cursor = 0;
+    platforms.forEach((platform) => {
+      const contribution = segment * (this.getPlatformProgressPercent(platform) / 100);
+      const fill = fills[platform];
+      if (fill) {
+        fill.el.style.left = `${cursor.toFixed(2)}%`;
+        fill.el.style.width = `${contribution.toFixed(2)}%`;
+      }
+      cursor += contribution;
+    });
+  }
+
+  formatScanMode(scanSettings) {
+    if (!scanSettings || scanSettings.mode === 'pattern') {
+      return 'Pattern mode';
+    }
+    return 'Discriminative mode';
+  }
   
   updateScanStatus(isScanning) {
     this.isScanning = isScanning;
@@ -2515,7 +3458,7 @@ class CommisionsfinderPopup {
       this.statusText.textContent = 'Ready to scan';
       this.statusDot.className = 'status-dot';
       this.scanBtn.disabled = false;
-      this.scanBtn.style.display = 'block';
+      this.scanBtn.style.display = '';
       this.stopBtn.style.display = 'none';
     
     }
@@ -2524,8 +3467,16 @@ class CommisionsfinderPopup {
   showProgress(show) {
     this.scanProgress.style.display = show ? 'block' : 'none';
     if (show) {
-      this.progressFill.style.width = '0%';
+      this.setOverallProgress(0);
       this.currentProgressAnimation = null;
+    }
+  }
+
+  setOverallProgress(value) {
+    const progress = Math.max(0, Math.min(100, Number(value) || 0));
+    this.progressFill.style.width = `${progress}%`;
+    if (this.progressBar) {
+      this.progressBar.setAttribute('aria-valuenow', String(Math.round(progress)));
     }
   }
 
@@ -2536,8 +3487,6 @@ class CommisionsfinderPopup {
   }
 
   updateScanProgress(platform, progressData) {
-    console.log('Updating scan progress:', platform, progressData);
-    
     // Find the platform option element
     const platformOption = document.querySelector(`.platform-option[data-platform="${platform}"]`);
     if (!platformOption) return;
@@ -2652,7 +3601,10 @@ class CommisionsfinderPopup {
 
     // Update UI
     this.updateProgressText(statusText);
-    this.progressFill.style.width = `${Math.min(targetProgress, 100)}%`;
+    this.setOverallProgress(targetProgress);
+    this.updateScanSummary({
+      [`${platform}_progress`]: progressData
+    });
     
     // Add error indicator if needed
     if (progressData.errors > 0) {
@@ -2941,7 +3893,7 @@ class CommisionsfinderPopup {
       this.showProgress(false);
       this.showResultsLoading(false);
       this.stopBtn.style.display = 'none';
-      this.scanBtn.style.display = 'block';
+      this.scanBtn.style.display = '';
       this.scanBtn.disabled = false;
       this.scanBtn.querySelector('.scan-text').textContent = 'Scan for Open Commissions';
       this.hideLoginRequiredOverlay();
@@ -2958,16 +3910,15 @@ class CommisionsfinderPopup {
     if (isMinimized) {
       // Expand
       this.roadmapSection.classList.remove('minimized');
-      toggleIcon.textContent = '⇓';
       this.roadmapToggleBtn.title = 'Minimize Roadmap';
       this.roadmapToggleBtn.setAttribute('aria-expanded', 'true');
     } else {
       // Minimize
       this.roadmapSection.classList.add('minimized');
-      toggleIcon.textContent = '❯❯';
       this.roadmapToggleBtn.title = 'Expand Roadmap';
       this.roadmapToggleBtn.setAttribute('aria-expanded', 'false');
     }
+    void toggleIcon;
 
     // Save the state to storage
     try {
@@ -2997,7 +3948,7 @@ class CommisionsfinderPopup {
         this.showProgress(false);
         this.showResultsLoading(false);
         this.stopBtn.style.display = 'none';
-        this.scanBtn.style.display = 'block';
+        this.scanBtn.style.display = '';
         this.scanBtn.disabled = false;
         this.scanBtn.querySelector('.scan-text').textContent = 'Scan for Open Commissions';
         
@@ -3089,15 +4040,12 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
 
     try {
       // Send the currently selected quantization to check its status
-      const response = await chrome.runtime.sendMessage({ 
+      await chrome.runtime.sendMessage({
         type: 'GET_MODEL_STATUS',
         modelName: this.settings.selectedQuantization
       });
       
-      // No UI updates needed since we handle model download during scan
-      if (!response.isCached) {
-        console.log('Model not downloaded yet - will download during scan if needed');
-      }
+      // No UI updates needed since model download is handled during scan.
     } catch (error) {
       console.error('Error checking model status:', error);
     }
@@ -3124,6 +4072,7 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
   }
 
   handleSearchInput() {
+    this.primeE621EmbeddingsForSearch();
     this.updateTagAutocomplete();
     this.debouncedSearch();
   }
@@ -3262,7 +4211,7 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
 
     const localOptions = this.getLocalTagAutocompleteOptions(rawPrefix);
     this.renderTagAutocomplete(localOptions);
-    if (this.e621EmbeddingsLoaded) return;
+    if (this.e621EmbeddingsLoaded || this.e621EmbeddingsLoadPromise) return;
 
     if (this.tagAutocompleteTimer) {
       clearTimeout(this.tagAutocompleteTimer);
@@ -3411,9 +4360,9 @@ For now, please use FurAffinity and Bluesky for commission scanning.`;
       const benchmarkModule = await this.loadBenchmarkModule();
       const hasRunner = Boolean(benchmarkModule && benchmarkModule.BenchmarkRunner);
       if (this.benchmarkGroup) {
-        this.benchmarkGroup.style.display = hasRunner ? 'block' : 'none';
+        this.benchmarkGroup.style.display = hasRunner ? 'flex' : 'none';
       }
-    } catch (error) {
+    } catch {
       // Module not found, hide benchmark button.
       if (this.benchmarkGroup) {
         this.benchmarkGroup.style.display = 'none';
@@ -3741,14 +4690,11 @@ getSpeedClass(samplesPerSecond) {
   async checkDisclaimerAcknowledgment() {
     try {
       const result = await chrome.storage.local.get(['disclaimerAcknowledged']);
-      console.log('[Commsfinder] Disclaimer acknowledgment check:', result);
       
       // Check if disclaimerAcknowledged is explicitly true
       if (result.disclaimerAcknowledged === true) {
-        console.log('[Commsfinder] Disclaimer already acknowledged, hiding disclaimer');
         this.hideDisclaimer();
       } else {
-        console.log('[Commsfinder] Disclaimer not acknowledged, showing disclaimer');
         this.showDisclaimer();
       }
     } catch (error) {
@@ -3809,15 +4755,12 @@ getSpeedClass(samplesPerSecond) {
 
   async acceptDisclaimer() {
     try {
-      console.log('[Commsfinder] Saving disclaimer acknowledgment...');
-      
       // Save the acknowledgment
       await chrome.storage.local.set({ disclaimerAcknowledged: true });
       
       // Verify it was saved by reading it back
       const verification = await chrome.storage.local.get(['disclaimerAcknowledged']);
       if (verification.disclaimerAcknowledged === true) {
-        console.log('[Commsfinder] Disclaimer acknowledgment saved successfully');
         this.hideDisclaimer();
         this.showSuccess('Welcome to Commsfinder!');
       } else {
@@ -3837,6 +4780,100 @@ document.addEventListener('DOMContentLoaded', () => {
   const popup = new CommisionsfinderPopup();
   // Expose for debugging (can call window.popup.testSearch('term') in console)
   window.popup = popup;
+
+  // MOTD: bundled at build time via webpack require, no fetch needed
+  try {
+    // eslint-disable-next-line no-undef
+    const motds = require('../motd.json');
+    const entries = Object.entries(motds);
+    if (entries.length) {
+      const [msg, url] = entries[Math.floor(Math.random() * entries.length)];
+      const subtitle = document.querySelector('.header-subtitle');
+      if (subtitle) {
+        if (url && url.startsWith('http')) {
+          subtitle.innerHTML = '';
+          const a = document.createElement('a');
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.textContent = msg;
+          a.className = 'motd-link';
+          subtitle.appendChild(a);
+        } else {
+          subtitle.textContent = msg;
+        }
+      }
+    }
+  } catch (err) { console.warn('[MOTD]', err); }
+
+  if (typeof window.mountDitheredWave === 'function') {
+    const PRESETS = {
+      furaffinity: {
+        mode: 'bayer',
+        matrixSize: 4,
+        waveColor: '#ffb347',
+        baseColor: '#1a0a00',
+        pixelSize: 2,
+        colorNum: 8,
+        waveSpeed: 0.1,
+        waveFrequency: 2.4,
+        waveAmplitude: 0.5,
+      },
+      bluesky: {
+        mode: 'dots',
+        matrixSize: 8,
+        waveColor: '#5bb8ff',
+        baseColor: '#000614',
+        pixelSize: 2,
+        colorNum: 2,
+        waveSpeed: 0.1,
+        waveFrequency: 2.6,
+        waveAmplitude: 0.5,
+      },
+    };
+
+    window.__ditherPlatforms = [];
+    document.querySelectorAll('.platform-option').forEach((opt) => {
+      const progressEl = opt.querySelector('.platform-progress');
+      if (!progressEl) return;
+      const preset = PRESETS[opt.dataset.platform];
+      if (preset) {
+        window.__ditherPlatforms.push(window.mountDitheredWave(progressEl, preset));
+      }
+    });
+
+    const headerEl = document.querySelector('.header');
+    if (headerEl) {
+      window.__ditherHeader = window.mountDitheredWave(headerEl, {
+        mode: 'bayer',
+        matrixSize: 8,
+        waveColor: '#ffffff',
+        baseColor: '#000000',
+        pixelSize: 2,
+        colorNum: 8,
+        waveSpeed: 0.069,
+        waveFrequency: 2.2,
+        waveAmplitude: 0.5,
+      });
+    }
+
+    const statusEl = document.getElementById('scanStatus');
+    if (statusEl) {
+      const track = document.createElement('div');
+      track.className = 'scan-fill-track';
+      statusEl.insertBefore(track, statusEl.firstChild);
+      window.__scanFills = {};
+      ['furaffinity', 'bluesky'].forEach((platform) => {
+        const fill = document.createElement('div');
+        fill.className = `scan-fill scan-fill-${platform}`;
+        fill.style.left = '0%';
+        fill.style.width = '0%';
+        track.appendChild(fill);
+        const handle = window.mountDitheredWave(fill, PRESETS[platform]);
+        window.__scanFills[platform] = { el: fill, handle };
+      });
+    }
+  }
 });
 
 // Add notification animations to document

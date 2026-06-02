@@ -2,6 +2,7 @@ const path = require('path');
 const CopyPlugin = require('copy-webpack-plugin');
 const ESLintPlugin = require('eslint-webpack-plugin');
 const fs = require('fs');
+const { resolveOnnxRuntimeWebDist } = require('./webpack.onnx-assets');
 
 // Clean dist folder before building
 const distPath = path.resolve(__dirname, 'dist');
@@ -51,7 +52,7 @@ module.exports = {
         { from: 'popup', to: 'popup' },
         { from: 'e621-embeddings', to: 'e621-embeddings' },
         { from: 'manifest.json', to: 'manifest.json' },
-        { from: 'node_modules/onnxruntime-web/dist', to: 'onnxruntime-web',
+        { from: resolveOnnxRuntimeWebDist(), to: 'onnxruntime-web',
           globOptions: {
             ignore: ['**/ort.all.js', '**/ort.all.js.map','**/ort.all.mjs','**/ort.all.mjs.map']
           }
@@ -61,6 +62,7 @@ module.exports = {
           to: 'benchmark.js',
           noErrorOnMissing: true
         },
+        { from: 'motd.json', to: 'motd.json' },
       ],
     }),
     new ESLintPlugin({

@@ -22,6 +22,7 @@
     "*://*.x.com/*",
     "*://*.e621.net/*",
     "*://*.bsky.app/*",
+    "https://public.api.bsky.app/*",
     "*://*.huggingface.co/*",
     "*://*.xethub.hf.co/*"
   ],

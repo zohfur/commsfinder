@@ -16,9 +16,10 @@ env.useBrowserCache = true;
 // the Content Security Policy of Manifest V3 extensions. The wasm compilation will
 // happen in our own worker, which is fine.
 env.backends.onnx.wasm = {
-  // Try to use more threads for better performance (if supported)
-  // Note: In service workers, this may be limited, but worth trying
-  numThreads: navigator.hardwareConcurrency ? Math.min(4, navigator.hardwareConcurrency) : 2,
+  // Chrome extension service workers cannot run ONNX Runtime's threaded WASM
+  // path: it depends on APIs such as URL.createObjectURL and Atomics.wait that
+  // are unavailable or disallowed in this context.
+  numThreads: 1,
   // Disable proxy worker since it's not compatible with Chrome extension CSP
   proxy: false,
   // Set paths relative to the worker's location in /dist/utils/
@@ -620,6 +621,10 @@ export class AIAnalyzer {
                         title: item.title || '',
                         url: item.url || '',
                         date: item.date || '',
+                        description: item.description || '',
+                        thumbnailUrl: item.thumbnailUrl || '',
+                        imageUrl: item.imageUrl || '',
+                        previewUrl: item.previewUrl || '',
                         ...itemResult,
                         timeWeight
                     });

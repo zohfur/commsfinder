@@ -3,6 +3,7 @@ const CopyPlugin = require('copy-webpack-plugin');
 const ESLintPlugin = require('eslint-webpack-plugin');
 const ExtensionZipPlugin = require('./webpack.extension-zip-plugin');
 const fs = require('fs');
+const { resolveOnnxRuntimeWebDist } = require('./webpack.onnx-assets');
 
 // Clean dist folder before building
 const distPath = path.resolve(__dirname, 'dist/firefox');
@@ -52,20 +53,17 @@ module.exports = {
         { from: 'popup', to: 'popup' },
         { from: 'e621-embeddings', to: 'e621-embeddings' },
         { from: 'manifest.firefox.json', to: 'manifest.json' },
-        { from: 'node_modules/onnxruntime-web/dist', to: 'onnxruntime-web',
+        { from: resolveOnnxRuntimeWebDist(), to: 'onnxruntime-web',
           globOptions: {
             ignore: ['**/ort.all.js', '**/ort.all.js.map','**/ort.all.mjs','**/ort.all.mjs.map']
           }
-         },
-         {
-          from: 'ort-wasm-simd.wasm',
-          to: 'onnxruntime-web/ort-wasm-simd.wasm'
          },
         {
           from: 'benchmark.js',
           to: 'benchmark.js',
           noErrorOnMissing: true
         },
+        { from: 'motd.json', to: 'motd.json' },
       ],
     }),
     new ESLintPlugin({

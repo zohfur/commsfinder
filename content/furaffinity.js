@@ -257,6 +257,7 @@ const CONFIG = {
     MAX_RETRIES: 3,
     FAVORITES_PER_PAGE: 48,
     MAX_GALLERY_ITEMS: 10, // Limit gallery items to analyze per artist
+    MAX_GALLERY_DETAIL_ITEMS: 8, // Fetch detail pages for visible recent works so descriptions are analyzed.
     MAX_JOURNAL_LENGTH: 5000, // Limit journal text length
 };
 
@@ -634,6 +635,117 @@ function extractTextContent(element, taskName = '', startProgress = 0, endProgre
     return text.trim();
 }
 
+function resolveProfileAssetUrl(rawUrl, baseUrl) {
+    if (!rawUrl) return null;
+    try {
+        return new URL(rawUrl.replace(/^["']|["']$/g, ''), baseUrl).href;
+    } catch (error) {
+        console.warn('[CommsFinder] Could not resolve profile asset URL:', rawUrl, error);
+        return null;
+    }
+}
+
+function extractProfileBackgroundUrl(doc, profileUrl) {
+    const resolveCandidate = (rawUrl) => resolveProfileAssetUrl(rawUrl, profileUrl);
+    const getImageUrl = (image) => {
+        const srcset = image?.getAttribute('srcset')?.split(',')?.[0]?.trim()?.split(/\s+/)?.[0];
+        return resolveCandidate(
+            image?.getAttribute('src') ||
+            image?.getAttribute('data-src') ||
+            image?.getAttribute('data-fullview-src') ||
+            image?.getAttribute('data-preview-src') ||
+            srcset
+        );
+    };
+    const getBackgroundUrl = (element) => {
+        const style = element?.getAttribute('style') || '';
+        const match = style.match(/url\(["']?([^"')]+)["']?\)/i);
+        return resolveCandidate(match?.[1]);
+    };
+
+    const imageSelectors = [
+        '.userpage-profile-banner img',
+        '.userpage-banner img',
+        '.profile-banner img',
+        '#userpage-header img',
+        '[class*="banner" i] img',
+        '[id*="banner" i] img',
+        '[class*="cover" i] img',
+        '[id*="cover" i] img',
+        'img[src*="/userbanners/"]',
+        'img[src*="/banners/"]',
+        'img[src*="banner"]'
+    ];
+
+    for (const selector of imageSelectors) {
+        const image = doc.querySelector(selector);
+        const url = getImageUrl(image);
+        if (url) return url;
+    }
+
+    const styledCandidates = [
+        ...doc.querySelectorAll('[class*="banner" i], [id*="banner" i], [class*="cover" i], [id*="cover" i], [class*="header" i], [id*="header" i], [style*="background"]')
+    ];
+    for (const element of styledCandidates) {
+        const url = getBackgroundUrl(element);
+        if (url && /banner|cover|userpage|furaffinity|facdn|fa\.net/i.test(url)) {
+            return url;
+        }
+    }
+
+    return null;
+}
+
+function extractProfileStats(doc) {
+    const stats = {};
+    const statsSection = Array.from(doc.querySelectorAll('.userpage-section-right')).find(section =>
+        /Stats/i.test(section.querySelector('.section-header')?.textContent || '')
+    );
+
+    if (!statsSection) return stats;
+
+    const text = statsSection.textContent || '';
+    const readNumber = (label) => {
+        const match = text.match(new RegExp(`${label}:\\s*([\\d,]+)`, 'i'));
+        return match ? Number(match[1].replace(/,/g, '')) : null;
+    };
+
+    stats.views = readNumber('Views');
+    stats.submissions = readNumber('Submissions');
+    stats.favs = readNumber('Favs');
+    stats.commentsEarned = readNumber('Comments Earned');
+    stats.commentsMade = readNumber('Comments Made');
+    stats.journals = readNumber('Journals');
+
+    return Object.fromEntries(Object.entries(stats).filter(([, value]) => Number.isFinite(value)));
+}
+
+function extractPopupDate(element) {
+    const dateElement = element?.querySelector?.('span.popup_date') || element;
+    const dataTime = Number(dateElement?.getAttribute?.('data-time'));
+    if (Number.isFinite(dataTime) && dataTime > 0) {
+        return dataTime * 1000;
+    }
+
+    const dateText = dateElement?.textContent?.trim() || dateElement?.getAttribute?.('title') || '';
+    const parsed = Date.parse(dateText);
+    return Number.isFinite(parsed) ? parsed : '';
+}
+
+function extractImageUrl(image, baseUrl) {
+    if (!image) return '';
+    const srcset = image.getAttribute('srcset')?.split(',')?.[0]?.trim()?.split(/\s+/)?.[0];
+    return resolveProfileAssetUrl(
+        image.getAttribute('src') ||
+        image.getAttribute('data-src') ||
+        image.getAttribute('data-preview-src') ||
+        image.getAttribute('data-fullview-src') ||
+        image.getAttribute('data-image') ||
+        srcset,
+        baseUrl
+    ) || '';
+}
+
 // Scrape artist profile
 async function scrapeArtistProfile(username) {
     const benchmark = getBenchmark('furaffinity');
@@ -677,6 +789,8 @@ async function scrapeArtistProfile(username) {
             // Extract basic info
             const avatarImg = doc.querySelector('userpage-nav-avatar img');
             const displayNameElem = doc.querySelector('span.js-displayName');
+            const profileBackgroundUrl = extractProfileBackgroundUrl(doc, profileUrl);
+            const profileStats = extractProfileStats(doc);
             benchmark.endStep();
             
             progress.update({
@@ -758,6 +872,12 @@ async function scrapeArtistProfile(username) {
                 platform: 'furaffinity',
                 profileUrl: profileUrl,
                 avatarUrl: avatarImg ? avatarImg.src : null,
+                profileBackgroundUrl: profileBackgroundUrl,
+                bannerUrl: profileBackgroundUrl,
+                stats: profileStats,
+                viewCount: profileStats.views || null,
+                submissionCount: profileStats.submissions || null,
+                favCount: profileStats.favs || null,
                 bio: bio,
                 journal: journal,
                 commissionStatus: commissionStatus,
@@ -789,6 +909,7 @@ async function scrapeArtistProfile(username) {
 // Scrape gallery preview items
 async function scrapeGalleryPreview(doc, username) {
     const galleryItems = [];
+    const profileUrl = `https://www.furaffinity.net/user/${username}/`;
     
     try {
         console.log('[CommsFinder] Starting gallery preview scrape for:', username);
@@ -825,7 +946,7 @@ async function scrapeGalleryPreview(doc, username) {
         
         for (let i = 0; i < itemsToScrape; i++) {
             const figure = figures[i];
-            const imgElement = figure.querySelector('img[data-tags]');
+            const imgElement = figure.querySelector('img[data-tags], img');
             if (!imgElement) continue;
 
             // Extract submission ID from figure
@@ -842,37 +963,40 @@ async function scrapeGalleryPreview(doc, username) {
             if (submissionUrl && submissionUrl.startsWith('/')) {
                 submissionUrl = `https://www.furaffinity.net${submissionUrl}`;
             }
+
+            const thumbnailUrl = extractImageUrl(imgElement, profileUrl);
+            const postedAt = extractPopupDate(figure) || extractPopupDate(imgElement);
             
             const item = {
                 id: submissionId,
                 title: submissionMetadata.title || '',
+                description: submissionMetadata.description || submissionMetadata.description_html || '',
                 tags: tags,
-                date: submissionMetadata.date_full || '',
-                url: submissionUrl
+                date: postedAt || submissionMetadata.date_full || '',
+                dateLabel: submissionMetadata.date_fuzzy || '',
+                url: submissionUrl,
+                thumbnailUrl: thumbnailUrl
             };
             
             console.log('[CommsFinder] Scraped gallery item:', item);
             galleryItems.push(item);
         }
         
-        // If we need more data, scrape individual submissions
-        if (galleryItems.length < CONFIG.MAX_GALLERY_ITEMS) {
-            const additionalCount = Math.min(
-                CONFIG.MAX_GALLERY_ITEMS - galleryItems.length,
-                3 // Limit additional scraping
-            );
-            
-            console.log('[CommsFinder] Scraping additional submissions:', additionalCount);
-            
-            for (let i = 0; i < additionalCount; i++) {
-                if (galleryItems[i] && galleryItems[i].url) {
-                    const submissionData = await scrapeSubmission(galleryItems[i].url);
-                    if (submissionData) {
-                        Object.assign(galleryItems[i], submissionData);
-                        console.log('[CommsFinder] Enhanced gallery item with submission data:', galleryItems[i]);
-                    }
-                    await rateLimitedDelay();
+        const detailCount = Math.min(galleryItems.length, CONFIG.MAX_GALLERY_DETAIL_ITEMS);
+        console.log('[CommsFinder] Scraping submission details:', detailCount);
+
+        for (let i = 0; i < detailCount; i++) {
+            if (galleryItems[i] && galleryItems[i].url) {
+                const submissionData = await scrapeSubmission(galleryItems[i].url);
+                if (submissionData) {
+                    Object.assign(galleryItems[i], {
+                        ...submissionData,
+                        thumbnailUrl: submissionData.thumbnailUrl || galleryItems[i].thumbnailUrl,
+                        date: submissionData.date || galleryItems[i].date
+                    });
+                    console.log('[CommsFinder] Enhanced gallery item with submission data:', galleryItems[i]);
                 }
+                await rateLimitedDelay();
             }
         }
 
@@ -898,7 +1022,11 @@ async function scrapeSubmission(url) {
         // Extract submission details
         const titleElem = doc.querySelector('div.submission-title h2 p');
         const dateElem = doc.querySelector('span.popup_date');
-        const descElem = doc.querySelector('div.submission-description');
+        const descElem = doc.querySelector('div.submission-description, .submission-description, .submission-description .section-body');
+        const imageElem = doc.querySelector('.submission-content img, img#submissionImg, img[data-fullview-src], meta[property="og:image"]');
+        const imageUrl = imageElem?.tagName?.toLowerCase() === 'meta'
+            ? imageElem.getAttribute('content')
+            : extractImageUrl(imageElem, fullUrl);
         
         // Extract tags
         const tags = [];
@@ -908,9 +1036,10 @@ async function scrapeSubmission(url) {
         
         return {
             title: extractTextContent(titleElem),
-            date: dateElem ? dateElem.getAttribute('title') : '',
+            date: extractPopupDate(dateElem) || (dateElem ? dateElem.getAttribute('title') : ''),
             description: extractTextContent(descElem).substring(0, 1000),
-            tags: tags.join(', ')
+            tags: tags.join(', '),
+            thumbnailUrl: imageUrl || ''
         };
     } catch (error) {
         console.error('Error scraping submission:', error);
@@ -1101,8 +1230,9 @@ function formatDataForAnalysis(artistData) {
             title: item.title || '',
             description: item.description || '',
             tags: item.tags || '',
-            date: item.date || artistData.lastUpdated, // Fallback to profile update time if no item date
-            url: item.url || '' // Preserve the URL
+            date: item.date || '',
+            url: item.url || '', // Preserve the URL
+            thumbnailUrl: item.thumbnailUrl || ''
         })) : []
     };
     console.log('[CommsFinder] Formatted data:', formatted);
@@ -1272,7 +1402,12 @@ function patternAnalyzeComponentsFallback(components) {
                 galleryResults.push({
                     ...itemResult,
                     url: item.url,
-                    date: item.date
+                    date: item.date,
+                    title: item.title,
+                    description: item.description,
+                    thumbnailUrl: item.thumbnailUrl,
+                    imageUrl: item.imageUrl,
+                    previewUrl: item.previewUrl
                 });
                 allTriggers.push(...itemResult.triggers);
             }

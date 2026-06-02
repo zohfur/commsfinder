@@ -365,6 +365,55 @@ async function dedupeFetch(url, options = {}) {
     return promise;
 }
 
+function normalizeBlueskyAssetUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+        return null;
+    }
+
+    try {
+        return new URL(rawUrl, window.location.href).href;
+    } catch {
+        return null;
+    }
+}
+
+function getVisibleBlueskyBanner(userHandle) {
+    if (!userHandle || !location.pathname.includes('/profile/')) {
+        return null;
+    }
+
+    const visibleHandle = decodeURIComponent(location.pathname.split('/profile/')[1] || '').split('/')[0];
+    if (visibleHandle && visibleHandle !== userHandle) {
+        return null;
+    }
+
+    const imageSelectors = [
+        'img[src*="/img/banner/"]',
+        'img[alt*="banner" i]',
+        'img[aria-label*="banner" i]'
+    ];
+
+    for (const selector of imageSelectors) {
+        const image = document.querySelector(selector);
+        const url = normalizeBlueskyAssetUrl(image?.currentSrc || image?.src || image?.getAttribute('src'));
+        if (url) {
+            return url;
+        }
+    }
+
+    const styledElements = document.querySelectorAll('[style*="background"]');
+    for (const element of styledElements) {
+        const style = element.getAttribute('style') || '';
+        const match = style.match(/url\(["']?([^"')]+)["']?\)/i);
+        const url = normalizeBlueskyAssetUrl(match?.[1]);
+        if (url && url.includes('/img/banner/')) {
+            return url;
+        }
+    }
+
+    return null;
+}
+
 // Get cached profile data if still valid (checks both memory and storage)
 async function getCachedProfile(userDid) {
     return measureBenchmarkStep('Cache lookup', async () => {
@@ -689,6 +738,17 @@ async function getUserProfileAndPosts(userDid, userHandle) {
     const cachedData = await getCachedProfile(userDid);
     if (cachedData) {
         console.log(`[Bluesky] Using cached data for: ${userHandle}`);
+        const cachedBanner = cachedData.profileBackgroundUrl || cachedData.bannerUrl || cachedData.backgroundUrl;
+        const visibleBanner = cachedBanner ? null : getVisibleBlueskyBanner(userHandle);
+        if (visibleBanner) {
+            const refreshedData = {
+                ...cachedData,
+                profileBackgroundUrl: visibleBanner,
+                bannerUrl: visibleBanner
+            };
+            cacheProfile(userDid, refreshedData);
+            return refreshedData;
+        }
         return cachedData;
     }
     
@@ -781,12 +841,15 @@ async function getUserProfileAndPosts(userDid, userHandle) {
             benchmark.endStep();
 
             benchmark.startStep('Finalizing artist data');
+            const profileBannerUrl = profile.banner || getVisibleBlueskyBanner(userHandle) || null;
             const artistData = {
                 username: userHandle,
                 displayName: profile.displayName || userHandle,
                 platform: 'bluesky',
                 profileUrl: `https://bsky.app/profile/${userHandle}`,
                 avatarUrl: profile.avatar || null,
+                profileBackgroundUrl: profileBannerUrl,
+                bannerUrl: profileBannerUrl,
                 bio: profile.description || '',
                 followerCount: profile.followersCount || 0,
                 followingCount: profile.followsCount || 0,
@@ -820,6 +883,13 @@ async function getUserProfileAndPosts(userDid, userHandle) {
     return null;
 }
 
+function extractPostThumbnail(post) {
+    const embed = post?.embed;
+    const images = embed?.images || embed?.media?.images || [];
+    const firstImage = Array.isArray(images) ? images[0] : null;
+    return firstImage?.thumb || firstImage?.fullsize || null;
+}
+
 // Process posts to extract relevant information
 function processPosts(feed) {
     return feed.slice(0, CONFIG.MAX_POSTS_PER_USER).map(feedItem => {
@@ -842,6 +912,7 @@ function processPosts(feed) {
             repostCount: post.repostCount || 0,
             likeCount: post.likeCount || 0,
             embed: post.embed || null,
+            thumbnailUrl: extractPostThumbnail(post),
             isPinned: false // Default to false, will be set to true for pinned posts
         };
     });
@@ -900,6 +971,7 @@ async function fetchPinnedPost(postUri) {
             repostCount: post.repostCount || 0,
             likeCount: post.likeCount || 0,
             embed: post.embed || null,
+            thumbnailUrl: extractPostThumbnail(post),
             isPinned: true // This is a pinned post
         };
         
@@ -939,6 +1011,7 @@ function formatDataForAnalysis(artistData) {
             text: (post.text || '').substring(0, 300), // Truncate post text too
             date: post.timestamp,
             url: post.url || '',
+            thumbnailUrl: post.thumbnailUrl || '',
             isPinned: post === artistData.pinnedPost,
             engagement: {
                 likes: post.likeCount,
@@ -1355,6 +1428,10 @@ function patternAnalyzeComponentsFallback(components) {
                     ...postResult,
                     url: post.url,
                     date: post.date,
+                    text: post.text,
+                    thumbnailUrl: post.thumbnailUrl,
+                    imageUrl: post.imageUrl,
+                    previewUrl: post.previewUrl,
                     isPinned: post.isPinned
                 });
                 allTriggers.push(...postResult.triggers);

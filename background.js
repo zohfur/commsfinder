@@ -244,21 +244,6 @@ function scheduleResultsUpdate() {
 }
 
 /**
- * Flush any pending throttled RESULTS_UPDATED immediately and cancel the timer.
- */
-function flushResultsUpdate() {
-  if (pendingResultsUpdateTimer) {
-    clearTimeout(pendingResultsUpdateTimer);
-    pendingResultsUpdateTimer = null;
-  }
-  if (!scanCache) return;
-  chrome.runtime.sendMessage({
-    type: 'RESULTS_UPDATED',
-    data: scanCache.results
-  }).catch(() => {});
-}
-
-/**
  * Tear down the scan cache after a scan ends.
  * Ensures a final storage flush before clearing.
  */
@@ -478,7 +463,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.type === 'SCAN_REQUEST') {
-      handleScanRequest(request.platforms, sendResponse);
+      handleScanRequest(request.platforms, sendResponse, request.scanSettings || null);
       return true; // Keep message channel open for async response
     }
 
@@ -753,7 +738,12 @@ async function patternAnalyzeComponents(components) {
         galleryResults.push({
           ...itemResult,
           url: item.url,
-          date: item.date
+          date: item.date,
+          title: item.title,
+          description: item.description,
+          thumbnailUrl: item.thumbnailUrl,
+          imageUrl: item.imageUrl,
+          previewUrl: item.previewUrl
         });
         allTriggers.push(...itemResult.triggers);
       }
@@ -788,6 +778,10 @@ async function patternAnalyzeComponents(components) {
           ...postResult,
           url: post.url,
           date: post.date,
+          text: post.text,
+          thumbnailUrl: post.thumbnailUrl,
+          imageUrl: post.imageUrl,
+          previewUrl: post.previewUrl,
           isPinned: post.isPinned
         });
         allTriggers.push(...postResult.triggers);
@@ -893,7 +887,7 @@ async function handleAnalyzeRequest(request, sender, sendResponse) {
   }
 }
 
-async function handleScanRequest(platforms, sendResponse) {
+async function handleScanRequest(platforms, sendResponse, scanSettings = null) {
   try {
     // Validate request
     if (!platforms || platforms.length === 0) {
@@ -912,7 +906,7 @@ async function handleScanRequest(platforms, sendResponse) {
     sendResponse({ success: true, message: 'Scan initiated' });
 
     // Perform setup asynchronously
-    initializeScan(platforms).catch(error => {
+    initializeScan(platforms, { scanSettings }).catch(error => {
       console.error('Scan initialization failed:', error);
       // Notify popup of error
       chrome.runtime.sendMessage({
@@ -1012,6 +1006,17 @@ async function initializeScan(platforms, options = {}) {
       scanResults = [];
     }
 
+    const { aiEnabled = true, selectedQuantization = 'full' } = await chrome.storage.local.get([
+      'aiEnabled',
+      'selectedQuantization'
+    ]);
+    const activeScanSettings = options.scanSettings || {
+      platforms: [...platforms],
+      mode: aiEnabled ? 'discriminative' : 'pattern',
+      model: aiEnabled ? selectedQuantization : null,
+      startedAt: Date.now()
+    };
+
     // Batch-read all platform progress in a single storage call
     const progressKeys = platforms.map(p => `${p}_progress`);
     const progressStorage = await chrome.storage.local.get(progressKeys);
@@ -1051,6 +1056,7 @@ async function initializeScan(platforms, options = {}) {
       await chrome.storage.local.set({ 
         scanInProgress: true,
         scanStartTime: Date.now(),
+        activeScanSettings,
         lastPlatformScanned: null,
         platformProgress: {},
         ...(options.forceFresh ? { scanResults: [] } : {})
@@ -1074,7 +1080,6 @@ async function initializeScan(platforms, options = {}) {
     initScanCache(scanResults);
 
     // Check if model needs to be downloaded
-    const { aiEnabled = true } = await chrome.storage.local.get(['aiEnabled']);
     if (aiEnabled) {
       try {
         const quantizationType = getCurrentQuantization();
@@ -1499,29 +1504,6 @@ function areNamesSimilar(name1, name2) {
   return false;
 }
 
-// Helper function to find cross-platform duplicates
-function findCrossplatformDuplicate(newArtist, existingResults) {
-  return existingResults.find(existing => {
-    // Skip if same platform (handled by existing logic)
-    if (existing.platform === newArtist.platform || 
-        (existing.platforms && existing.platforms.includes(newArtist.platform))) {
-      return false;
-    }
-    
-    // Check username similarity
-    if (areNamesSimilar(existing.username, newArtist.username)) {
-      return true;
-    }
-    
-    // Check display name similarity
-    if (areNamesSimilar(existing.displayName, newArtist.displayName)) {
-      return true;
-    }
-    
-    return false;
-  });
-}
-
 // Helper function to determine which artist result is "better"
 function chooseBetterArtist(existing, newArtist) {
   // Priority 1: Commission status (open > unclear > closed)
@@ -1569,8 +1551,17 @@ function mergePlatformData(baseArtist, additionalArtist) {
   // Store the original platform data
   baseArtist.platformData[baseArtist.platform] = {
     username: baseArtist.username,
+    displayName: baseArtist.displayName,
+    bio: baseArtist.bio,
+    stats: baseArtist.stats || null,
+    followerCount: baseArtist.followerCount || null,
+    viewCount: baseArtist.viewCount || null,
+    submissionCount: baseArtist.submissionCount || null,
+    favCount: baseArtist.favCount || null,
     profileUrl: baseArtist.profileUrl,
     avatarUrl: baseArtist.avatarUrl,
+    profileBackgroundUrl: baseArtist.profileBackgroundUrl || baseArtist.bannerUrl || baseArtist.backgroundUrl || null,
+    bannerUrl: baseArtist.bannerUrl || baseArtist.profileBackgroundUrl || baseArtist.backgroundUrl || null,
     confidence: baseArtist.confidence,
     commissionStatus: baseArtist.commissionStatus,
     triggers: baseArtist.triggers,
@@ -1581,8 +1572,17 @@ function mergePlatformData(baseArtist, additionalArtist) {
   // Store the additional platform data
   baseArtist.platformData[additionalArtist.platform] = {
     username: additionalArtist.username,
+    displayName: additionalArtist.displayName,
+    bio: additionalArtist.bio,
+    stats: additionalArtist.stats || null,
+    followerCount: additionalArtist.followerCount || null,
+    viewCount: additionalArtist.viewCount || null,
+    submissionCount: additionalArtist.submissionCount || null,
+    favCount: additionalArtist.favCount || null,
     profileUrl: additionalArtist.profileUrl,
     avatarUrl: additionalArtist.avatarUrl,
+    profileBackgroundUrl: additionalArtist.profileBackgroundUrl || additionalArtist.bannerUrl || additionalArtist.backgroundUrl || null,
+    bannerUrl: additionalArtist.bannerUrl || additionalArtist.profileBackgroundUrl || additionalArtist.backgroundUrl || null,
     confidence: additionalArtist.confidence,
     commissionStatus: additionalArtist.commissionStatus,
     triggers: additionalArtist.triggers,
@@ -1681,8 +1681,17 @@ async function handleArtistFound(artistData) {
             ...existingPlatformData,
             [artistData.platform]: {
               username: resultToStore.username,
+              displayName: resultToStore.displayName,
+              bio: resultToStore.bio,
+              stats: resultToStore.stats || null,
+              followerCount: resultToStore.followerCount || null,
+              viewCount: resultToStore.viewCount || null,
+              submissionCount: resultToStore.submissionCount || null,
+              favCount: resultToStore.favCount || null,
               profileUrl: resultToStore.profileUrl,
               avatarUrl: resultToStore.avatarUrl,
+              profileBackgroundUrl: resultToStore.profileBackgroundUrl || resultToStore.bannerUrl || resultToStore.backgroundUrl || null,
+              bannerUrl: resultToStore.bannerUrl || resultToStore.profileBackgroundUrl || resultToStore.backgroundUrl || null,
               confidence: resultToStore.confidence,
               commissionStatus: resultToStore.commissionStatus,
               triggers: resultToStore.triggers,
@@ -1692,6 +1701,43 @@ async function handleArtistFound(artistData) {
           }
         };
       }
+      const currentArtist = scanCache.results[exactDuplicateIndex];
+      const currentPlatformData = currentArtist.platformData || {};
+      const platformKey = artistData.platform;
+      const existingPlatformSnapshot = currentPlatformData[platformKey] || {};
+      const freshBackgroundUrl = resultToStore.profileBackgroundUrl || resultToStore.bannerUrl || resultToStore.backgroundUrl || null;
+      const freshBannerUrl = resultToStore.bannerUrl || resultToStore.profileBackgroundUrl || resultToStore.backgroundUrl || null;
+
+      scanCache.results[exactDuplicateIndex] = {
+        ...currentArtist,
+        profileBackgroundUrl: currentArtist.profileBackgroundUrl || freshBackgroundUrl || null,
+        bannerUrl: currentArtist.bannerUrl || freshBannerUrl || null,
+        backgroundUrl: currentArtist.backgroundUrl || freshBackgroundUrl || null,
+        platformData: {
+          ...currentPlatformData,
+          [platformKey]: {
+            ...existingPlatformSnapshot,
+            username: resultToStore.username || existingPlatformSnapshot.username,
+            displayName: resultToStore.displayName || existingPlatformSnapshot.displayName,
+            bio: resultToStore.bio || existingPlatformSnapshot.bio,
+            stats: resultToStore.stats || existingPlatformSnapshot.stats || null,
+            followerCount: resultToStore.followerCount || existingPlatformSnapshot.followerCount || null,
+            viewCount: resultToStore.viewCount || existingPlatformSnapshot.viewCount || null,
+            submissionCount: resultToStore.submissionCount || existingPlatformSnapshot.submissionCount || null,
+            favCount: resultToStore.favCount || existingPlatformSnapshot.favCount || null,
+            profileUrl: resultToStore.profileUrl || existingPlatformSnapshot.profileUrl,
+            avatarUrl: resultToStore.avatarUrl || existingPlatformSnapshot.avatarUrl,
+            profileBackgroundUrl: freshBackgroundUrl || existingPlatformSnapshot.profileBackgroundUrl || null,
+            bannerUrl: freshBannerUrl || existingPlatformSnapshot.bannerUrl || null,
+            confidence: resultToStore.confidence ?? existingPlatformSnapshot.confidence,
+            commissionStatus: resultToStore.commissionStatus || existingPlatformSnapshot.commissionStatus,
+            triggers: resultToStore.triggers || existingPlatformSnapshot.triggers,
+            analysis: resultToStore.analysis || existingPlatformSnapshot.analysis,
+            lastUpdated: resultToStore.lastUpdated || existingPlatformSnapshot.lastUpdated
+          }
+        }
+      };
+
       const updatedArtist = scanCache.results[exactDuplicateIndex];
       const tagMergedArtist = mergeProfileTagData(updatedArtist, resultToStore);
       // Preserve platform merge fields explicitly to avoid accidental overwrite by tag merge logic.
@@ -1795,10 +1841,12 @@ async function handleScanComplete(platform, results) {
       const finalResults = scanCache ? [...scanCache.results] : [];
       await teardownScanCache();
 
+      const { activeScanSettings = null } = await chrome.storage.local.get(['activeScanSettings']);
       await chrome.storage.local.set({
         scanInProgress: false,
         activeScansInProgress: false,
         lastScanDate: Date.now(),
+        lastScanSettings: activeScanSettings ? { ...activeScanSettings, completedAt: Date.now() } : null,
         completedPlatforms: [],
         activePlatforms: []
       });
@@ -1828,10 +1876,12 @@ async function handleScanComplete(platform, results) {
       const finalResults = scanCache ? [...scanCache.results] : [];
       await teardownScanCache();
 
+      const { activeScanSettings = null } = await chrome.storage.local.get(['activeScanSettings']);
       await chrome.storage.local.set({
         scanInProgress: false,
         activeScansInProgress: false,
         lastScanDate: Date.now(),
+        lastScanSettings: activeScanSettings ? { ...activeScanSettings, completedAt: Date.now() } : null,
         completedPlatforms: []
       });
       await chrome.storage.local.remove(['loginRequiredPause']);
@@ -1873,6 +1923,7 @@ async function getStoredResults(sendResponse) {
     const data = await chrome.storage.local.get([
       'scanResults', 
       'lastScanDate', 
+      'lastScanSettings',
       'scanInProgress',
       'activeScansInProgress',
       'loginRequiredPause'
@@ -1932,6 +1983,7 @@ async function getStoredResults(sendResponse) {
       success: true,
       results: data.scanResults || [],
       lastScanDate: data.lastScanDate,
+      lastScanSettings: data.lastScanSettings || null,
       scanInProgress: data.scanInProgress || false,
       activeScansInProgress: actuallyActiveScanning,
       loginRequiredPause: data.loginRequiredPause || null
@@ -2219,7 +2271,7 @@ async function initializeSelectedQuantization() {
 initializeSelectedQuantization();
 
 // Handle extension icon click - open in window instead of popup
-chrome.action.onClicked.addListener(async (tab) => {
+chrome.action.onClicked.addListener(async () => {
   if (isDebugMode) {
     console.log('[Background] Extension icon clicked, opening window');
   }
