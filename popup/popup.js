@@ -18,7 +18,7 @@ const LOCAL_E621_TAG_SUGGESTIONS = [
   'werewolf',
 ];
 
-class CommisionsfinderPopup {
+class CommissionsfinderPopup {
   constructor() {
     this.isScanning = false;
     this.currentResults = [];
@@ -4777,7 +4777,7 @@ getSpeedClass(samplesPerSecond) {
 
 // Initialize popup when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-  const popup = new CommisionsfinderPopup();
+  const popup = new CommissionsfinderPopup();
   // Expose for debugging (can call window.popup.testSearch('term') in console)
   window.popup = popup;
 

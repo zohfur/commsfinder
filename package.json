@@ -5,6 +5,7 @@
   "main": "background.js",
   "scripts": {
     "test": "jest",
+    "purge:css": "node scripts/purge-css.cjs",
     "build": "webpack --config webpack.config.js",
     "build:chrome": "webpack --config webpack.chrome.config.js",
     "build:firefox": "webpack --config webpack.firefox.config.js",
@@ -40,6 +41,7 @@
     "eslint-webpack-plugin": "^5.0.2",
     "globals": "^16.3.0",
     "jest": "^29.7.0",
+    "purgecss": "^8.0.0",
     "webpack": "^5.89.0",
     "webpack-cli": "^5.1.4"
   }
