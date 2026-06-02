@@ -222,7 +222,7 @@ export async function patternAnalyzeComponents(components) {
         commissionStatus: bestPostResult.commissionStatus
       };
 
-      if (bestPostResult.isPinned && bestPostResult.confidence > 0.7) {
+      if (pinnedPosts.length > 0 && bestPostResult.confidence > 0.7) {
         highestConfidence = bestPostResult.confidence;
         overallStatus = bestPostResult.commissionStatus;
       }

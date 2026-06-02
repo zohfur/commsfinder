@@ -3955,7 +3955,8 @@ class CommissionsfinderPopup {
         // Reload default settings
         this.loadSettings();
         
-        this.showSuccess('All data cleared successfully');
+        this.showSuccess('All data cleared. Restarting…');
+        setTimeout(() => window.close(), 1500);
       } catch (error) {
         console.error('Error clearing data:', error);
         this.showError('Failed to clear data');

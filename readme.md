@@ -193,17 +193,17 @@ See the full [Privacy Policy](privacy-policy.md) for details.
 > Rough and very subject to change!!  
 I work on this project randomly when the motivation gloops between all the creases in my wrinkly brain  
 
-**v1.1.1: Current release**
+**v1.1.1: Previous release**
 
 - Popup UI and scan-experience polish pass
  - Accessibility and interaction improvements (touch targets, structure, status messaging)
  - Styling consistency and animation cleanup
 
-**v1.2: Quality of life**
+**v1.2: Current release**
 
- - Scan statistics
- - CSV / JSON export
- - Improved "No-AI mode" accuracy
+ - New UI and artwork
+ - Stability and codebase improvements
+ - Performance improvements and faster scans
 
 **v1.3: Model update**
 

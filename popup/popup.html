@@ -17,7 +17,7 @@
         <div class="brand-lockup">
           <img src="../icons/icon48.png" alt="Commsfinder" class="header-icon">
           <div class="brand-copy">
-            <h1 class="header-title">Commsfinder - v1.1.1</h1>
+            <h1 class="header-title">Commsfinder - v1.2</h1>
             <p class="header-subtitle">Find artists open to commission</p>
           </div>
         </div>
@@ -175,7 +175,7 @@
           <label class="sr-only" for="searchFilter">Search results</label>
           <div class="search-chip-input" id="searchChipInput">
             <div class="search-chips" id="searchChips"></div>
-            <input type="text" id="searchFilter" class="search-input search-filter-input" placeholder="Tags: goo -hypnosis ~werewolf, wildcards goo*, filters score:>30, order:score">
+            <input type="text" id="searchFilter" class="search-input search-filter-input" placeholder="e621 tag querying, example: anthro dragon painting -human">
             <button id="clearSearchBtn" class="clear-search-btn" type="button" title="Clear search" aria-label="Clear search">×</button>
             <span class="search-glass" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none">
@@ -303,6 +303,18 @@
                 <li>Improve UI and scan experience</li>
                 <li>Bug fixing</li>
                 <li>Implement user feedback</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="roadmap-item">
+            <div class="version-tag">v1.2</div>
+            <div class="roadmap-content">
+              <h4>Finished UI and UX</h4>
+              <ul>
+                <li>New UI and artwork</li>
+                <li>Stability and codebase improvements</li>
+                <li>Performance improvements and faster scans</li>
               </ul>
             </div>
           </div>
@@ -516,11 +528,11 @@
                   <span class="setting-row-help setting-row-help-modes">
                     <span class="setting-mode-line">
                       <span class="setting-mode-tag setting-mode-tag-on">ON</span>
-                      <span><strong>Discriminative:</strong> Fine-tuned DistilBERT, nuanced commission detection.</span>
+                      <span><strong>Discriminative:</strong> Custom commission detection model by Zohfur analyzes content and determines whether an artist is open or not with pretty decent accuracy.</span>
                     </span>
                     <span class="setting-mode-line">
                       <span class="setting-mode-tag setting-mode-tag-off">OFF</span>
-                      <span><strong>Regex:</strong> Pattern match on phrases like "commissions open". Faster, flatter.</span>
+                      <span><strong>Regex:</strong> Hardcoded pattern matching and filters. Still very much a work in progress and will likely be much less accurate than discriminative mode.</span>
                     </span>
                   </span>
                 </label>
@@ -535,7 +547,7 @@
               <div class="setting-row setting-row-stack" id="modelSelectionGroup" style="display: none;">
                 <label class="setting-row-text" for="modelSelector">
                   <span class="setting-row-title">Model Quantization</span>
-                  <span class="setting-row-help">Smaller files load faster; larger preserve more accuracy.</span>
+                  <span class="setting-row-help">Smaller files load faster; larger preserve more accuracy. If the open/closed accuracy seems off, you can try running a larger model.</span>
                 </label>
                 <div class="setting-row-control setting-row-control-wide">
                   <div class="select-wrap">
@@ -577,7 +589,7 @@
               <div class="setting-row">
                 <label class="setting-row-text" for="zenMode">
                   <span class="setting-row-title">Zen Mode</span>
-                  <span class="setting-row-help">Removes ambient UI so only scan results remain.</span>
+                  <span class="setting-row-help">Removes extra stuff from the UI and just shows you the minimum.</span>
                 </label>
                 <span class="setting-row-control">
                   <span class="setting-switch">
@@ -620,7 +632,7 @@
               <div class="setting-row setting-row-stack" id="benchmarkGroup" style="display: none;">
                 <div class="setting-row-text">
                   <span class="setting-row-title">Full Scan Benchmark</span>
-                  <span class="setting-row-help">Runs a fresh scan across every supported platform and downloads a JSON timing report.</span>
+                  <span class="setting-row-help">Runs a fresh scan across every supported platform and downloads a JSON timing report. Only use this if you know what you're doing (or Ben asks you to), it takes quite a while.</span>
                 </div>
                 <div class="setting-row-control setting-row-control-wide">
                   <button id="runBenchmarkBtn" class="benchmark-btn">
@@ -648,7 +660,7 @@
               <div class="setting-row setting-row-stack setting-row-danger">
                 <div class="setting-row-text">
                   <span class="setting-row-title">Clear all data</span>
-                  <span class="setting-row-help">Wipes cached scan results, favorites, blacklist, and progress. Cannot be undone.</span>
+                  <span class="setting-row-help">Wipes cached scan results, favorites, blacklist, and progress. Cannot be undone. Restart the extension to fully clear it!</span>
                 </div>
                 <div class="setting-row-control setting-row-control-wide">
                   <button class="danger-btn" id="clearAllData">Clear All Data</button>
