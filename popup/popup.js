@@ -2797,6 +2797,12 @@ class CommissionsfinderPopup {
       </section>
     ` : '';
 
+    // TODO: Add a "Why Commsfinder Flagged This Artist" section to the profile
+    // page (matches the website's profile card). Render the detected signals that
+    // drove the score, e.g. bio mentions commissions, pinned post: open, recent
+    // posts, display name, each as a check-tagged chip. Source the per-component
+    // signals from the confidence breakdown so users can see what triggered the
+    // match. Place it in profile-identity, below the status badge.
     scroll.innerHTML = `
       <button class="profile-back-btn" id="profileBackBtn" type="button" aria-label="Back to results">
         <span aria-hidden="true">←</span> Back
@@ -2807,8 +2813,9 @@ class CommissionsfinderPopup {
         <div class="profile-avatar-wrap">
           <img src="${safeAvatarUrl}" alt="${this.escapeAttribute(displayName)}" class="${avatarClasses}">
           <span class="profile-status-orb ${statusMeta.className}" title="${this.escapeAttribute(statusMeta.label)}">
-            <span class="profile-status-icon" aria-hidden="true">${this.escapeHtml(statusMeta.icon)}</span>
+            <span class="profile-status-dot" aria-hidden="true"></span>
             <span class="profile-status-text">${this.escapeHtml(statusMeta.label)}</span>
+            <span class="profile-status-score">${confidencePercent}% match</span>
           </span>
         </div>
       </div>
@@ -2816,7 +2823,6 @@ class CommissionsfinderPopup {
         <h2 class="profile-name">${safeName}</h2>
         <div class="profile-handles">${usernamesHtml}</div>
         ${profileStatsHtml}
-        <div class="profile-confidence-pill ${confidencePercent >= 70 ? 'high' : confidencePercent >= 50 ? 'medium' : 'low'}">${confidencePercent}% match</div>
       </div>
       ${bios.length ? `<section class="profile-section profile-about-section">${bios.map(bio => `<p class="profile-bio">${this.linkifyText(bio)}</p>`).join('')}</section>` : ''}
       ${worksHtml}

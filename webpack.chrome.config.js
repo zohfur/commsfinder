@@ -50,6 +50,7 @@ module.exports = {
       patterns: [
         { from: 'icons', to: 'icons' },
         { from: 'logos', to: 'logos' },
+        { from: 'fonts', to: 'fonts' },
         { from: 'popup', to: 'popup' },
         { from: 'e621-embeddings', to: 'e621-embeddings' },
         { from: 'manifest.chrome.json', to: 'manifest.json' },
